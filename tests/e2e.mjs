@@ -14,13 +14,18 @@ const SHOTS = process.argv[3] || '/tmp';
 // Simulación de window.claude (inyectada solo en esta prueba).
 const MOCK = () => {
   const between = (s, t) => { const a = s.indexOf(`<${t}>`), b = s.indexOf(`</${t}>`); return a < 0 ? '' : s.slice(a + t.length + 2, b).trim(); };
-  const MES = { ENE: '01', FEB: '02' };
+  const MES = { ENE: '01', FEB: '02', MAR: '03' };
   window.__calls = []; window.__saved = [];
   async function sample(prompt, opts = {}) {
     await new Promise(r => setTimeout(r, 150));
     const op = (prompt.match(/OPERACIÓN: (\w+)/) || [])[1];
     window.__calls.push(op + (opts.images ? `+${opts.images.length}img` : ''));
     let out;
+    // Simula el límite de salida: el PDF mixto completo (2 páginas) produce una respuesta truncada.
+    if (op === 'interpret' && /ESCANEADA/.test(prompt) && prompt.includes('--- Página 1 ---')) {
+      window.__truncations = (window.__truncations || 0) + 1;
+      return { text: '{"period":"2026-03","movements":[', truncated: true };
+    }
     if (op === 'interpret' && /ESCANEADA/.test(prompt)) {
       // Simulación: la "lectura" de la imagen devuelve los movimientos del PDF sintético mixto.
       if (!opts.images?.length || !(opts.images[0] instanceof Blob)) throw { code: 'invalid_request', message: 'sin imagen' };
@@ -39,7 +44,7 @@ const MOCK = () => {
         const abono = /CUOTA|APORTACION/.test(m[3]);
         movements.push({ date: `${period}-${m[1]}`, concept: m[3].trim(), amount: Number(m[4].replace(/,/g, '')), type: abono ? 'abono' : 'cargo', category: '', sourcePageNumber: 1, sourceText: line });
       }
-      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
+      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-03' ? { found: false, rows: [] } : period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
         'Aritmética bancaria cuadra: 648,404.56 + 212,901.83 − 187,641.84 = 673,664.55 (coincide con el saldo actual del estado de cuenta).',
         'Los movimientos fueron tomados de los reportes de ingresos y egresos (páginas 4 a 8). La página 1 solo muestra el resumen.',
         'El depósito en efectivo de $3,500.00 va a Caja Chica y no forma parte de los abonos bancarios; se incluyó con cash=true.',
@@ -87,6 +92,8 @@ await page.waitForSelector('text=Confirmar datos >> nth=0');
 await page.waitForFunction(() => document.querySelector('.stage-head .k')?.textContent.includes('Etapa 2'));
 ok(true, 'Interpretación de 3 meses y paso a confirmar datos');
 ok((await page.evaluate(() => window.__calls)).includes('interpret+1img') && (await page.evaluate(() => window.__imageBytes)) > 20000, 'La página escaneada se envía a Claude como imagen JPEG');
+ok((await page.evaluate(() => window.__truncations)) === 1 && (await page.textContent('details.log')).includes('se divide en dos lotes'), 'Respuesta truncada: el PDF se divide en lotes de páginas automáticamente');
+ok((await page.textContent('main')).includes('$561,400.00'), 'Los lotes se unen con los saldos del resumen');
 ok((await page.$$('.pill.scan')).length === 5, 'Movimientos leídos de la imagen marcados como «Escaneado»');
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
