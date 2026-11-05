@@ -34,3 +34,39 @@ inc2 = sum(m[3] for m in feb); exp2 = sum(m[2] for m in feb)
 ini2 = 500000 + inc - exp - 2000  # discontinuidad sintética de $2,000
 stmt(sys.argv[1] + "/sintetico-2026-02.pdf", "FEB", 2026, 28, ini2, ini2 + inc2 - exp2 + 1000, feb, inc2, exp2)  # descuadre sintético de $1,000
 print("ok", 500000 + inc - exp, ini2)
+
+# Estado MIXTO sintético: página 1 con texto, página 2 escaneada (imagen sin capa de texto).
+import sys
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.lib.utils import ImageReader
+
+def mixto(out_dir):
+    img = Image.new("L", (1275, 1650), 250)
+    d = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 26)
+    except Exception:
+        font = ImageFont.load_default()
+    rows = [("05/MAR", "CUOTA MANTENIMIENTO DEPTO 101-140", "", "115,000.00"), ("08/MAR", "SERV LIMPIEZA MARZO", "18,000.00", ""), ("10/MAR", "VIGILANCIA SEGURIDAD PRIVADA", "48,000.00", ""),
+            ("12/MAR", "CFE LUZ AREAS COMUNES", "6,100.00", ""), ("15/MAR", "HONORARIOS ADMINISTRACION", "15,000.00", "")]
+    d.text((80, 80), "DETALLE DE MOVIMIENTOS (COPIA ESCANEADA - SINTETICO)", fill=20, font=font)
+    y = 160
+    for r in rows:
+        d.text((80, y), r[0], fill=30, font=font); d.text((220, y), r[1], fill=30, font=font)
+        d.text((850, y), r[2], fill=30, font=font); d.text((1050, y), r[3], fill=30, font=font)
+        y += 50
+    img = img.rotate(0.6, fillcolor=250)
+    c = canvas.Canvas(out_dir + "/sintetico-2026-03-mixto.pdf", pagesize=letter)
+    c.setFont("Helvetica", 10)
+    c.drawString(50, 740, "BANCO DE PRUEBA S.A. - DOCUMENTO SINTETICO PARA PRUEBAS")
+    c.drawString(50, 722, "CONDOMINIO DE PRUEBA A.C.   CUENTA DE CHEQUES 000123456")
+    c.drawString(50, 708, "PERIODO DEL 01/MAR/2026 AL 31/MAR/2026")
+    for i, (k, v) in enumerate([("SALDO ANTERIOR", 533500), ("DEPOSITOS", 115000), ("RETIROS", 87100), ("SALDO FINAL", 561400)]):
+        c.drawString(50, 690 - 14 * i, k); c.drawRightString(560, 690 - 14 * i, f"{v:,.2f}")
+    c.showPage()
+    c.drawImage(ImageReader(img), 0, 0, width=612, height=792)
+    c.showPage(); c.save()
+    print("mixto ok")
+mixto(sys.argv[1])

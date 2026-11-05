@@ -18,7 +18,8 @@ function transform(file) {
   return `const ${varName(file)} = (() => {\n${src}\nreturn { ${exportsList.join(', ')} };\n})();`;
 }
 
-const bundle = MODULES.map(transform).join('\n\n');
+const logo = 'data:image/webp;base64,' + fs.readFileSync(path.join(ROOT, 'web/assets/logo-240.webp')).toString('base64');
+const bundle = MODULES.map(transform).join('\n\n').replace("'__LOGO_DATA_URI__'", JSON.stringify(logo));
 const css = fs.readFileSync(path.join(ROOT, 'web/styles.css'), 'utf8');
 const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174';
 
@@ -26,7 +27,7 @@ const fragment = `<title>Hampton Court · Estados de cuenta</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Condominio / Análisis de estados de cuenta — Workflow con IA">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap">
 <style>
 ${css}
 </style>

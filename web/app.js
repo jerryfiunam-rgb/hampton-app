@@ -8,7 +8,7 @@ const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
 const TIMEOUT_MS = { interpret: 300000, analyze: 180000, report: 180000, alert: 180000, test: 60000 };
 const STAGES = [
-  { n: 1, t: 'Condominio y PDFs', s: 'Carga' },
+  { n: 1, t: 'Carga de PDFs', s: 'Carga' },
   { n: 2, t: 'Confirmar datos', s: 'Revisión' },
   { n: 3, t: 'Diagnóstico', s: 'Motor + IA' },
   { n: 4, t: 'Hallazgos', s: 'Selección' },
@@ -18,6 +18,16 @@ const STAGES = [
   { n: 8, t: 'Entrega', s: 'Descargas' },
 ];
 
+// Datos fijos del condominio (no se capturan en cada análisis).
+const CONDO = Object.freeze({
+  name: 'Condominio Hampton Court',
+  address: 'Mar de la Tranquilidad 35, Colonia Los Olivos, Coyoacán, Ciudad de México',
+  context: 'Condominio Hampton Court, ubicado en Mar de la Tranquilidad 35, Colonia Los Olivos, Coyoacán, Ciudad de México, con 80 departamentos.',
+  administrator: '', units: 80, monthlyFee: '', delinquentDebt: '',
+});
+const LOGO = '__LOGO_DATA_URI__';
+const PAGE_IMAGES = new Map(); // fileId -> [{number, blob}] (solo en memoria; no se guarda en el navegador)
+
 const now = () => new Date().toISOString();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -25,7 +35,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 function fresh() {
   return {
     schema: SCHEMA, version: 1, caseId: uid(), createdAt: now(), stage: 1,
-    condo: { name: '', context: '', administrator: '', units: '', monthlyFee: '', delinquentDebt: '' },
+    condo: { ...CONDO },
     consent: false,
     files: [], months: [], fundOpenings: {},
     meta: { bank: '', accountType: '', currency: 'MXN' },
@@ -46,7 +56,7 @@ function load() {
     if (!raw) return null;
     const s = JSON.parse(raw);
     if (s?.schema !== SCHEMA) return null;
-    return { ...fresh(), ...s };
+    return { ...fresh(), ...s, condo: { ...CONDO } };
   } catch { storageOk = false; return null; }
 }
 function save() {
@@ -114,6 +124,7 @@ async function initAI() {
     AI.mode = 'claude.ai';
     try { AI.sample = await window.claude.use('sample'); } catch { AI.sample = null; }
     try { AI.downloads = await window.claude.use('downloads'); } catch { AI.downloads = null; }
+    try { const lim = AI.sample ? await AI.sample.limits() : null; AI.maxImages = lim?.images?.maxCount || 0; } catch { AI.maxImages = 0; }
     AI.model = 'Claude (cuenta de claude.ai del usuario)';
     if (!AI.sample) AI.error = 'Esta vista no permite llamar a Claude. Abre la aplicación en claude.ai con tu sesión iniciada.';
   } else {
@@ -121,7 +132,7 @@ async function initAI() {
     try {
       const r = await fetch('/api/status', { credentials: 'same-origin' });
       const j = await r.json();
-      AI.server = j; AI.model = j.model;
+      AI.server = j; AI.model = j.model; AI.maxImages = 8;
     } catch { AI.error = 'No se pudo consultar el servidor (/api/status).'; }
   }
   AI.checked = true;
@@ -157,11 +168,11 @@ function errorText(code, msg) {
   return (map[code] || 'Error inesperado.') + (msg && !map[code] ? ` ${msg}` : '') + (code === 'invalid_result' && msg ? ` Detalle: ${msg}` : '');
 }
 
-async function callAI(op, payload, key) {
+async function callAI(op, payload, key, { images = [], label = '' } = {}) {
   if (!aiReady()) { const e = new Error('not_connected'); e.code = 'not_connected'; throw e; }
   const { system, user } = buildPrompt(op, payload);
   const ctl = new AbortController();
-  busy = { key, startedAt: Date.now(), msg: 'Iniciando…', ctl, chars: 0 };
+  busy = { key, startedAt: Date.now(), msg: label ? `${label}: iniciando…` : 'Iniciando…', label, ctl, chars: 0 };
   render();
   tick = setInterval(() => { if (busy) updateBusy(); }, 8000);
   const timer = setTimeout(() => { ctl.abort(); busy && (busy.timedOut = true); }, TIMEOUT_MS[op] || 180000);
@@ -172,7 +183,8 @@ async function callAI(op, payload, key) {
       try {
         const res = await AI.sample(`${system}\n\n${user}`, {
           modelTier: op === 'interpret' ? 'default' : 'complex', cache: false, signal: ctl.signal,
-          onText: ({ text }) => { if (busy) { busy.chars = text.length; busy.msg = 'Recibiendo respuesta…'; updateBusy(); } },
+          ...(images.length ? { images } : {}),
+          onText: ({ text }) => { if (busy) { busy.chars = text.length; busy.msg = `${busy.label ? busy.label + ': ' : ''}recibiendo respuesta…`; updateBusy(); } },
         });
         if (res.truncated) { const e = new Error('truncated'); e.code = 'truncated'; throw e; }
         text = res.text;
@@ -182,11 +194,11 @@ async function callAI(op, payload, key) {
         throw e;
       }
     } else {
-      ({ text, usage, model } = await serverAI(op, payload, ctl.signal));
+      ({ text, usage, model } = await serverAI(op, payload, ctl.signal, images));
     }
     const parsed = parseJsonText(text);
     const result = validateResult(op, parsed, payload);
-    S.calls.push({ action: op, model, at: started, finishedAt: now(), inputTokens: usage?.input_tokens ?? null, outputTokens: usage?.output_tokens ?? null, approxInputChars: system.length + user.length, approxOutputChars: text.length });
+    S.calls.push({ action: op + (images.length ? ` (+${images.length} imágenes)` : ''), model, at: started, finishedAt: now(), inputTokens: usage?.input_tokens ?? null, outputTokens: usage?.output_tokens ?? null, approxInputChars: system.length + user.length, approxOutputChars: text.length });
     save();
     return result;
   } catch (e) {
@@ -197,8 +209,10 @@ async function callAI(op, payload, key) {
   }
 }
 
-async function serverAI(op, payload, signal) {
-  const r = await fetch('/api/ai', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op, payload }), signal });
+const blobToBase64 = b => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(b); });
+async function serverAI(op, payload, signal, images = []) {
+  const imgs = await Promise.all(images.map(blobToBase64));
+  const r = await fetch('/api/ai', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op, payload, images: imgs }), signal });
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('text/html')) { const e = new Error('html'); e.code = 'html_response'; throw e; }
   if (!r.ok && !ct.includes('event-stream')) { let j = {}; try { j = await r.json(); } catch {} const e = new Error(j.message || r.statusText); e.code = j.code || 'upstream_error'; throw e; }
@@ -232,23 +246,53 @@ function updateBusy() {
 }
 
 // ---------- Lectura de PDF ----------
-async function extractPdf(file) {
+// Una página se trata como escaneada si casi no tiene texto, o si contiene imágenes y poco texto.
+// Esas páginas se renderizan a JPEG (solo en memoria) y Claude las lee como imagen.
+const SCAN_TEXT_MIN = 120, MIXED_TEXT_MAX = 1500;
+async function pageHasImages(page) {
+  try {
+    const ops = await page.getOperatorList();
+    const O = window.pdfjsLib.OPS;
+    const img = new Set([O.paintImageXObject, O.paintInlineImageXObject, O.paintImageXObjectRepeat, O.paintInlineImageXObjectGroup, O.paintJpegXObject].filter(x => x !== undefined));
+    return ops.fnArray.some(fn => img.has(fn));
+  } catch { return false; }
+}
+async function renderPage(page) {
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.5, 1700 / Math.max(base.width, base.height));
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+  canvas.width = canvas.height = 0;
+  return blob;
+}
+async function extractPdf(file, id, onPage) {
   const lim = checkFileLimits(file);
   if (lim) throw Object.assign(new Error(lim), { code: 'limit' });
   if (!window.pdfjsLib) throw new Error('No se cargó el lector de PDF (PDF.js). Revisa tu conexión y recarga.');
   const buf = await file.arrayBuffer();
   const doc = await window.pdfjsLib.getDocument({ data: buf, isEvalSupported: false, disableAutoFetch: true, enableXfa: false }).promise;
   if (doc.numPages > PDF_MAX_PAGES) { await doc.destroy(); throw Object.assign(new Error(`«${file.name}» tiene ${doc.numPages} páginas; el límite es ${PDF_MAX_PAGES}. No se procesaron datos parciales.`), { code: 'limit' }); }
-  const pages = [];
+  const pages = [], images = [];
   for (let i = 1; i <= doc.numPages; i++) {
+    onPage?.(i, doc.numPages);
     const page = await doc.getPage(i);
     const tc = await page.getTextContent();
-    pages.push({ number: i, text: itemsToLines(tc.items).join('\n') });
+    const text = itemsToLines(tc.items).join('\n');
+    const len = text.replace(/\s/g, '').length;
+    const scanned = len < SCAN_TEXT_MIN || (len < MIXED_TEXT_MAX && await pageHasImages(page));
+    if (scanned) images.push({ number: i, blob: await renderPage(page) });
+    pages.push({ number: i, text, scanned });
+    page.cleanup();
   }
   await doc.destroy();
+  if (images.length) PAGE_IMAGES.set(id, images);
   const all = pages.map(p => p.text).join('\n');
-  if (all.replace(/\s/g, '').length < 40) throw Object.assign(new Error(`«${file.name}» no contiene texto seleccionable (parece escaneado). Exporta el estado de cuenta desde la banca en línea como PDF con texto.`), { code: 'notext' });
-  return { id: uid(), fileName: file.name, size: file.size, period: detectPeriod(all), pages, extractedAt: now(), status: 'extraído' };
+  return { id, fileName: file.name, size: file.size, period: detectPeriod(all), pages, extractedAt: now(), status: 'extraído' };
 }
 
 async function addFiles(list) {
@@ -259,9 +303,10 @@ async function addFiles(list) {
     const tmp = { id: uid(), fileName: f.name, size: f.size, status: 'leyendo', pages: [] };
     S.files.push(tmp); render();
     try {
-      const out = await extractPdf(f);
-      Object.assign(tmp, out, { id: tmp.id });
-      log('pdf_extraido', `${f.name}: ${out.pages.length} páginas, período detectado ${out.period || 'no detectado'}`);
+      const out = await extractPdf(f, tmp.id, (i, n) => { const el = document.querySelector(`[data-reading="${tmp.id}"]`); if (el) el.textContent = `Leyendo página ${i} de ${n}…`; });
+      Object.assign(tmp, out);
+      const sc = out.pages.filter(p => p.scanned).length;
+      log('pdf_extraido', `${f.name}: ${out.pages.length} páginas (${sc} escaneadas), período detectado ${out.period || 'no detectado'}`);
       if (S.months.length) invalidate('mapping');
     } catch (e) {
       tmp.status = 'error'; tmp.error = e.message || String(e); tmp._file = f;
@@ -272,6 +317,32 @@ async function addFiles(list) {
 }
 
 // ---------- Acciones de IA por etapa ----------
+function interpretChunks(f) {
+  const imgs = PAGE_IMAGES.get(f.id) || [];
+  const max = Math.max(1, Math.min(AI.maxImages || 5, 20));
+  const chunks = [{ pages: [], images: [] }];
+  for (const p of f.pages) {
+    let cur = chunks.at(-1);
+    const img = p.scanned ? imgs.find(x => x.number === p.number) : null;
+    if (img && cur.images.length >= max) { cur = { pages: [], images: [] }; chunks.push(cur); }
+    cur.pages.push({ ...p, imageIndex: img ? cur.images.length + 1 : null, imageMissing: p.scanned && !img });
+    if (img) cur.images.push(img.blob);
+  }
+  return chunks;
+}
+
+// Une las partes de un mismo estado de cuenta leído en varios lotes.
+function mergeParts(parts, f) {
+  const first = v => parts.map(p => p[v]).find(x => x !== null && x !== undefined && x !== '');
+  const lastFinal = [...parts].reverse().map(p => p.finalBalance).find(x => x !== null && x !== undefined);
+  const period = parts.map(p => p.period).find(x => x && x !== f.period) || parts[0].period;
+  let n = 0;
+  const movements = parts.flatMap(p => [...p.movements, ...p.unclassifiedMovements]).map(m => ({ ...m, id: `${period}-${String(++n).padStart(3, '0')}` }));
+  let q = 0;
+  const aiQuestions = parts.flatMap(p => p.aiQuestions || []).map(x => ({ ...x, id: `q-ai-${period}-${++q}`, period }));
+  return E.recomputeMonth({ ...parts[0], period, initialBalance: parts[0].initialBalance ?? first('initialBalance'), finalBalance: lastFinal ?? null, reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []) });
+}
+
 async function runInterpret(onlyIds = null) {
   const targets = S.files.filter(f => f.status !== 'error' && f.pages?.length && (onlyIds ? onlyIds.includes(f.id) : !S.months.some(m => m.fileId === f.id)));
   if (!targets.length) { errors.interpret = 'No hay PDFs nuevos por interpretar.'; render(); return; }
@@ -279,19 +350,32 @@ async function runInterpret(onlyIds = null) {
   for (const f of targets) {
     try {
       const prev = S.months.find(m => m.fileId === f.id);
+      const hasScans = f.pages.some(p => p.scanned);
+      if (hasScans && !PAGE_IMAGES.has(f.id) && !prev) throw Object.assign(new Error('Las páginas escaneadas no se conservan al recargar. Quita el archivo y vuelve a cargar el PDF.'), { code: 'reload_pdf' });
+      if (hasScans && PAGE_IMAGES.has(f.id) && AI.mode === 'claude.ai' && !AI.maxImages) throw Object.assign(new Error('Esta vista no permite enviar imágenes a Claude para leer las páginas escaneadas.'), { code: 'images_unavailable' });
       const answers = prev ? (prev.aiQuestions || []).filter(q => S.answers[q.id]).map(q => ({ question: q.prompt, answer: S.answers[q.id] })) : [];
-      const month = await callAI('interpret', { file: f, condo: S.condo, previous: prev ? slimMonth(prev) : null, answers }, 'interpret');
+      const chunks = interpretChunks(f);
+      const parts = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const label = chunks.length > 1 ? `${f.fileName} · parte ${i + 1} de ${chunks.length}` : f.fileName;
+        parts.push(await callAI('interpret', { file: { ...f, pages: chunks[i].pages }, part: chunks.length > 1 ? { index: i + 1, total: chunks.length } : null, condo: condoForAI(), previous: prev ? slimMonth(prev) : null, answers }, 'interpret', { images: chunks[i].images, label }));
+      }
+      const month = parts.length === 1 ? parts[0] : mergeParts(parts, f);
+      const scannedPages = new Set(f.pages.filter(p => p.scanned).map(p => p.number));
+      for (const m of [...month.movements, ...month.unclassifiedMovements]) m.fromScan = scannedPages.has(m.sourcePageNumber);
+      const errs = E.validateMonthMapping(month);
+      if (errs.length) throw Object.assign(new Error(errs.slice(0, 3).join(' ')), { code: 'invalid_result' });
       if (S.months.some(m => m.period === month.period && m.fileId !== f.id)) throw Object.assign(new Error(`El período ${month.period} ya está cargado con otro PDF. Elimina el duplicado.`), { code: 'duplicate_period' });
-      // Sustituye solo si la interpretación nueva es válida (validateResult ya lo comprobó).
+      // Sustituye solo si la interpretación nueva es válida.
       if (prev) for (const q of prev.aiQuestions || []) if (S.answers[q.id]) S.appliedAnswers[q.id] = { answer: S.answers[q.id], at: now() };
       S.months = S.months.filter(m => m.fileId !== f.id).concat(month);
       f.period = month.period; f.status = 'interpretado';
       if (!S.meta.bank && month.bank) S.meta.bank = month.bank;
       if (!S.meta.accountType && month.accountType) S.meta.accountType = month.accountType;
       invalidate('mapping');
-      log(prev ? 'reinterpretación' : 'interpretación', `${f.fileName} → ${month.period}: ${month.movements.length + month.unclassifiedMovements.length} movimientos`);
+      log(prev ? 'reinterpretación' : 'interpretación', `${f.fileName} → ${month.period}: ${month.movements.length + month.unclassifiedMovements.length} movimientos${scannedPages.size ? ` (${scannedPages.size} páginas escaneadas leídas como imagen)` : ''}`);
     } catch (e) {
-      errors.interpret = `${f.fileName}: ${errorText(e.code, e.message)}`;
+      errors.interpret = `${f.fileName}: ${['reload_pdf', 'images_unavailable', 'duplicate_period'].includes(e.code) ? e.message : errorText(e.code, e.message)}`;
       log('error_ia', `interpret ${f.fileName}: ${e.code || ''} ${e.message}`);
       save(); render(); return false;
     }
@@ -315,7 +399,7 @@ async function runAnalyze() {
   } catch (e) { errors.analyze = errorText(e.code, e.message); log('error_ia', `analyze: ${e.code || ''} ${e.message}`); }
   save(); render();
 }
-const condoForAI = () => ({ name: S.condo.name, context: S.condo.context, administrator: S.condo.administrator, units: E.num(S.condo.units), monthlyFee: E.num(S.condo.monthlyFee), delinquentDebt: E.num(S.condo.delinquentDebt), bank: S.meta.bank, accountType: S.meta.accountType, currency: S.meta.currency });
+const condoForAI = () => ({ name: CONDO.name, address: CONDO.address, context: CONDO.context, units: CONDO.units, bank: S.meta.bank, accountType: S.meta.accountType, currency: S.meta.currency });
 
 function selectedFindings() {
   const props = S.diagnosis?.ai?.findings || [];
@@ -427,7 +511,7 @@ function restoreJSON(text) {
   if (!Array.isArray(j.months) || !Array.isArray(j.files) || typeof j.condo !== 'object') throw new Error('La copia está incompleta: faltan condominio, archivos o mapeo.');
   for (const m of j.months) { const errs = E.validateMonthMapping(m); if (errs.length) throw new Error(`Mapeo inválido en ${m.period}: ${errs[0]}`); }
   for (const k of ['apiKey', 'key', 'token']) delete j[k];
-  const n = { ...fresh(), ...j };
+  const n = { ...fresh(), ...j, condo: { ...CONDO } };
   n.consent = false; n.confirmation = null; n.review = null; n.closedAt = null;
   if (n.alert) n.alert.acceptedAt = null;
   n.selectionConfirmedAt = null;
@@ -449,8 +533,9 @@ function render() {
   const focusId = document.activeElement?.id;
   root.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="eyebrow">Condominio / Estados de cuenta</span><span class="name">Análisis de estados de cuenta — Workflow con IA</span></div>
-    <span class="spacer"></span>
+    <img class="logo" src="${LOGO}" alt="Escudo del Condominio Hampton Court" width="84" height="85">
+    <h1 class="apptitle">Análisis de estados de cuenta - <span>Condominio Hampton Court</span></h1>
+    <span class="addr">${esc(CONDO.address)} · ${CONDO.units} departamentos</span>
     <span class="conn">${connBadge()}</span>
   </header>
   <div class="shell">
@@ -487,26 +572,13 @@ function stageView() {
 
 // ----- Etapa 1 -----
 function stage1() {
-  const c = S.condo;
   const newFiles = S.files.filter(f => f.status === 'extraído' && !S.months.some(m => m.fileId === f.id));
-  const canRun = c.name.trim() && S.consent && aiReady() && newFiles.length;
-  return `${head(1, 'Condominio y estados de cuenta', 'Carga de uno a doce estados de cuenta mensuales en PDF. El texto se extrae en este navegador; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
-  <section class="panel"><h2>Condominio</h2>
-    <div class="grid2">
-      <label class="f">Nombre y dirección del condominio<input type="text" id="c-name" data-bind="condo.name" maxlength="200" value="${esc(c.name)}" placeholder="Nombre, calle, colonia, alcaldía" ${S.closedAt ? 'disabled' : ''}><span class="hint">${c.name.length}/200</span></label>
-      <label class="f">Administrador<input type="text" id="c-admin" data-bind="condo.administrator" maxlength="120" value="${esc(c.administrator)}" placeholder="Nombre o empresa"></label>
-    </div>
-    <label class="f">Contexto del condominio<textarea id="c-ctx" data-bind="condo.context" maxlength="3000" placeholder="Número de departamentos, cuota ordinaria vigente, fondos especiales activos (p. ej. impermeabilización por edificio), objetivo del análisis…">${esc(c.context)}</textarea><span class="hint">${c.context.length}/3,000</span></label>
-    <div class="grid3">
-      <label class="f">N.º de departamentos<input type="number" id="c-units" data-bind="condo.units" min="0" step="1" value="${esc(c.units)}"><span class="hint">Para la tasa de recaudación.</span></label>
-      <label class="f">Cuota ordinaria mensual (MXN)<input type="number" id="c-fee" data-bind="condo.monthlyFee" min="0" step="0.01" value="${esc(c.monthlyFee)}"><span class="hint">Teórico = departamentos × cuota.</span></label>
-      <label class="f">Deuda morosa conocida (MXN)<input type="number" id="c-debt" data-bind="condo.delinquentDebt" min="0" step="0.01" value="${esc(c.delinquentDebt)}"><span class="hint">Opcional. Sin dato no se calcula morosidad.</span></label>
-    </div>
-  </section>
+  const canRun = S.consent && aiReady() && newFiles.length;
+  return `${head(1, 'Estados de cuenta del mes', 'Carga de uno a doce estados de cuenta mensuales en PDF, con texto o escaneados. El texto se extrae en este navegador y las páginas escaneadas se envían como imagen; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
   <section class="panel"><h2>Estados de cuenta (PDF)</h2>
-    <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto (no escaneado)</span></div>
+    <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto, escaneado o mixto: las páginas escaneadas se leen como imagen</span></div>
     ${errors.files ? `<div class="status err" role="alert">${esc(errors.files)}</div>` : ''}
-    ${S.files.length ? `<ul class="files">${S.files.map(f => `<li><div class="stack"><span class="fn">${esc(f.fileName)}</span><span class="meta">${f.status === 'leyendo' ? '<span class="spinner"></span>Leyendo…' : f.status === 'error' ? `<span style="color:var(--crit)">${esc(f.error)}</span>` : `${f.pages.length} pág. · período ${esc(f.period || 'por identificar')} · ${esc(f.status)}`}</span></div><div class="row">${f.status === 'error' && f._file ? `<button class="btn sm" data-act="retry-file" data-id="${f.id}" ${dis()}>Reintentar</button>` : ''}<button class="btn sm danger" data-act="remove-file" data-id="${f.id}" ${dis(S.closedAt)}>Quitar</button></div></li>`).join('')}</ul>` : ''}
+    ${S.files.length ? `<ul class="files">${S.files.map(f => `<li><div class="stack"><span class="fn">${esc(f.fileName)}</span><span class="meta">${f.status === 'leyendo' ? `<span class="spinner"></span><span data-reading="${f.id}">Leyendo…</span>` : f.status === 'error' ? `<span style="color:var(--crit)">${esc(f.error)}</span>` : `${f.pages.length} pág.${f.pages.some(p => p.scanned) ? ` (${f.pages.filter(p => p.scanned).length} escaneada${f.pages.filter(p => p.scanned).length === 1 ? '' : 's'}${f.pages.some(p => p.scanned) && !PAGE_IMAGES.has(f.id) ? '; vuelve a cargar el PDF para leerlas' : ''})` : ''} · período ${esc(f.period || 'por identificar')} · ${esc(f.status)}`}</span></div><div class="row">${f.status === 'error' && f._file ? `<button class="btn sm" data-act="retry-file" data-id="${f.id}" ${dis()}>Reintentar</button>` : ''}<button class="btn sm danger" data-act="remove-file" data-id="${f.id}" ${dis(S.closedAt)}>Quitar</button></div></li>`).join('')}</ul>` : ''}
   </section>
   <section class="panel"><h2>Conexión y consentimiento</h2>
     ${AI.mode === 'claude.ai' ? `<p>Esta versión usa Claude a través de tu sesión de claude.ai: no necesitas clave API. La primera llamada pedirá tu permiso; el consumo corresponde a tu cuenta de Claude.</p>` : `<p>Esta versión llama a la API de Anthropic desde el servidor con tu clave cifrada (AES-GCM). El consumo corresponde a esa cuenta API.</p>`}
@@ -519,7 +591,7 @@ function stage1() {
     ${S.months.length ? `<button class="btn" data-go="2" ${dis()}>Ir a confirmar datos</button>` : ''}
     <label class="btn ghost" for="json-in">Restaurar copia JSON</label><input id="json-in" type="file" accept="application/json,.json" hidden>
     ${statusFor('interpret')}
-    ${!canRun && !busy ? `<span class="status">${!c.name.trim() ? 'Falta el nombre del condominio.' : !S.files.some(f => f.pages?.length) ? 'Carga al menos un PDF.' : !newFiles.length ? 'Todos los PDFs ya están interpretados.' : !aiReady() ? 'Conecta Claude.' : !S.consent ? 'Falta la autorización de envío.' : ''}</span>` : ''}
+    ${!canRun && !busy ? `<span class="status">${!S.files.some(f => f.pages?.length) ? 'Carga al menos un PDF.' : !newFiles.length ? 'Todos los PDFs ya están interpretados.' : !aiReady() ? 'Conecta Claude.' : !S.consent ? 'Falta la autorización de envío.' : ''}</span>` : ''}
   </div>
   ${errors.restore ? `<div class="status err" role="alert">${esc(errors.restore)}</div>` : ''}`;
 }
@@ -589,7 +661,7 @@ function monthCard(m, catOpts) {
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${(m.notes || []).length ? `<div class="banner">${src('ia')} ${m.notes.map(esc).join(' · ')}</div>` : ''}
     <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     <p style="font-size:12px;color:var(--ink-3)">Archivo: ${esc(file?.fileName || '—')}</p>
@@ -618,8 +690,8 @@ function stage3() {
   ${ind.gaps.length ? `<div class="banner warn">Comparabilidad limitada: faltan meses entre ${esc(ind.periodFrom)} y ${esc(ind.periodTo)} (${ind.gaps.map(esc).join(', ')}).</div>` : ''}
   <section class="panel"><h2>Indicadores ${src('motor')}</h2>${kpiGrid(ind)}</section>
   <section class="panel"><h2>Flujo mensual consolidado ${src('motor')}</h2>${flowTable(ind)}</section>
-  <section class="panel"><h2>Evolución del saldo bancario ${src('pdf')}</h2>${svgBalance(ind.months, { accent: '#3ccf8e' })}</section>
-  <section class="panel"><h2>Composición de egresos del período ${src('motor')}</h2>${svgComposition(ind.composition, { accent: '#3ccf8e' })}</section>
+  <section class="panel"><h2>Evolución del saldo bancario ${src('pdf')}</h2>${svgBalance(ind.months, { accent: '#a5532a' })}</section>
+  <section class="panel"><h2>Composición de egresos del período ${src('motor')}</h2>${svgComposition(ind.composition, { accent: '#a5532a' })}</section>
   <section class="panel"><h2>Indicadores de alerta</h2>
     <div class="grid3">
       <div class="kpi"><span class="l">Morosidad conocida</span><span class="v">${ind.delinquentDebt === null ? 'Sin datos' : E.fmtMXN(ind.delinquentDebt)}</span></div>
@@ -752,7 +824,7 @@ function setPath(path, val) { const [a, b] = path.split('.'); if (b) S[a][b] = v
 function wireAfterRender() {
   const fr = document.getElementById('preview');
   if (fr && S.report) {
-    fr.srcdoc = standaloneReport(S, indicators(), { preview: true });
+    fr.srcdoc = standaloneReport(S, indicators(), { preview: true, logo: LOGO });
     fr.onload = () => { try { fr.style.height = (fr.contentDocument.documentElement.scrollHeight + 20) + 'px'; } catch {} };
   }
   const drop = document.getElementById('drop');
@@ -775,11 +847,13 @@ document.addEventListener('click', async e => {
     case 'remove-file': {
       const f = S.files.find(x => x.id === t.dataset.id);
       S.files = S.files.filter(x => x.id !== t.dataset.id);
+      PAGE_IMAGES.delete(t.dataset.id);
       if (S.months.some(m => m.fileId === t.dataset.id)) { S.months = S.months.filter(m => m.fileId !== t.dataset.id); invalidate('mapping'); }
       log('pdf_quitado', f?.fileName); save(); return render();
     }
     case 'retry-file': {
       const f = S.files.find(x => x.id === t.dataset.id);
+      PAGE_IMAGES.delete(t.dataset.id);
       if (f?._file) { S.files = S.files.filter(x => x !== f); return addFiles([f._file]); }
       return;
     }
@@ -822,7 +896,7 @@ document.addEventListener('click', async e => {
     }
     case 'alert': { invalidate('alert'); save(); await runAlert(); if (S.alert && S.stage !== 7) go(7); return; }
     case 'accept-alert': S.alert.acceptedAt = now(); log('nota_aceptada', ''); save(); return render();
-    case 'dl-html': return download(`reporte-${slug(S.condo.name)}-${indicators().periodTo}.html`, standaloneReport(S, indicators()), 'text/html');
+    case 'dl-html': return download(`reporte-${slug(S.condo.name)}-${indicators().periodTo}.html`, standaloneReport(S, indicators(), { logo: LOGO }), 'text/html');
     case 'dl-json': return download(`analisis-${slug(S.condo.name)}-${new Date().toISOString().slice(0, 10)}.json`, exportJSON(), 'application/json');
     case 'close': S.closedAt = now(); log('cierre', 'Análisis cerrado por el usuario'); save(); return render();
     case 'new': S._confirmNew = true; return render();
@@ -835,7 +909,6 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset.bind) {
     setPath(t.dataset.bind, t.value);
-    if (t.dataset.bind === 'condo.name' || t.dataset.bind === 'condo.context') { const h = t.parentElement.querySelector('.hint'); if (h) h.textContent = `${t.value.length.toLocaleString('es-MX')}/${t.maxLength.toLocaleString('es-MX')}`; }
     if (t.dataset.bind === 'observationsDraft' && S.report && (S.review || S.alert)) { invalidate('review'); }
     save();
   }
@@ -851,7 +924,6 @@ document.addEventListener('change', e => {
     t.value = ''; return;
   }
   if (t.dataset.bindCheck) { S[t.dataset.bindCheck] = t.checked; log(t.dataset.bindCheck, t.checked ? 'otorgado' : 'retirado'); save(); return render(); }
-  if (['condo.units', 'condo.monthlyFee', 'condo.delinquentDebt'].includes(t.dataset.bind) && S.diagnosis) { invalidate('diagnosis'); save(); return render(); }
   if (t.dataset.bind === 'observationsDraft' || t.dataset.bind?.startsWith('meta.')) { if (t.dataset.bind.startsWith('meta.') && confirmed()) { S.confirmation = null; invalidate('confirmation'); } save(); return render(); }
   if (t.dataset.bind) return render();
   if (t.dataset.check) { S._checks[t.dataset.check] = t.checked; save(); return render(); }

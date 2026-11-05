@@ -16,12 +16,18 @@ const MOCK = () => {
   const between = (s, t) => { const a = s.indexOf(`<${t}>`), b = s.indexOf(`</${t}>`); return a < 0 ? '' : s.slice(a + t.length + 2, b).trim(); };
   const MES = { ENE: '01', FEB: '02' };
   window.__calls = []; window.__saved = [];
-  async function sample(prompt) {
+  async function sample(prompt, opts = {}) {
     await new Promise(r => setTimeout(r, 150));
     const op = (prompt.match(/OPERACIÓN: (\w+)/) || [])[1];
-    window.__calls.push(op);
+    window.__calls.push(op + (opts.images ? `+${opts.images.length}img` : ''));
     let out;
-    if (op === 'interpret') {
+    if (op === 'interpret' && /ESCANEADA/.test(prompt)) {
+      // Simulación: la "lectura" de la imagen devuelve los movimientos del PDF sintético mixto.
+      if (!opts.images?.length || !(opts.images[0] instanceof Blob)) throw { code: 'invalid_request', message: 'sin imagen' };
+      window.__imageBytes = opts.images[0].size;
+      const mv = (d, c, a, t) => ({ date: `2026-03-${d}`, concept: c, amount: a, type: t, category: '', sourcePageNumber: 2, sourceText: c });
+      out = { period: '2026-03', bank: 'Banco de prueba', initialBalance: 533500, finalBalance: 561400, reportedIncome: 115000, reportedExpense: 87100, movements: [mv('05', 'CUOTA MANTENIMIENTO DEPTO 101-140', 115000, 'abono'), mv('08', 'SERV LIMPIEZA MARZO', 18000, 'cargo'), mv('10', 'VIGILANCIA SEGURIDAD PRIVADA', 48000, 'cargo'), mv('12', 'CFE LUZ AREAS COMUNES', 6100, 'cargo'), mv('15', 'HONORARIOS ADMINISTRACION', 15000, 'cargo')], questions: [], notes: [] };
+    } else if (op === 'interpret') {
       const t = between(prompt, 'estado_de_cuenta');
       const per = t.match(/AL \d+\/([A-Z]{3})\/(\d{4})/);
       const period = `${per[2]}-${MES[per[1]]}`;
@@ -46,6 +52,7 @@ const MOCK = () => {
     } else out = 'OK';
     return { text: typeof out === 'string' ? out : JSON.stringify(out), truncated: false };
   }
+  sample.limits = async () => ({ maxPromptBytes: 262144, images: { maxCount: 5, maxInputBytes: 10e6, mediaTypes: ['image/jpeg', 'image/png'] } });
   window.claude = { use: async n => n === 'sample' ? sample : n === 'downloads' ? { save: async r => { window.__saved.push({ filename: r.filename, size: String(r.data).length, data: String(r.data) }); return { status: 'saved' }; } } : null };
 };
 
@@ -60,18 +67,21 @@ await page.addInitScript(MOCK);
 await page.goto('file://' + path.join(ROOT, 'dist/index.html'));
 const ok = (c, m) => { if (!c) throw new Error('FALLÓ: ' + m); console.log('✓', m); };
 
-await page.fill('#c-name', 'Condominio de prueba (sintético)');
-await page.fill('#c-units', '140'); await page.press('#c-units', 'Tab');
-await page.fill('#c-fee', '850'); await page.press('#c-fee', 'Tab');
-await page.setInputFiles('#pdf-in', [path.join(ROOT, 'tests/fixtures/sintetico-2026-01.pdf'), path.join(ROOT, 'tests/fixtures/sintetico-2026-02.pdf')]);
-await page.waitForFunction(() => document.querySelectorAll('.files li').length === 2 && !document.querySelector('.files .spinner'));
-ok((await page.textContent('.files')).includes('2026-01'), 'PDF.js extrae texto y detecta período');
+ok((await page.textContent('header')).includes('Análisis de estados de cuenta - Condominio Hampton Court') && !(await page.$('#c-name')), 'Encabezado fijo del condominio, sin captura de datos');
+await page.setInputFiles('#pdf-in', [path.join(ROOT, 'tests/fixtures/sintetico-2026-01.pdf'), path.join(ROOT, 'tests/fixtures/sintetico-2026-02.pdf'), path.join(ROOT, 'tests/fixtures/sintetico-2026-03-mixto.pdf')]);
+await page.waitForFunction(() => document.querySelectorAll('.files li').length === 3 && !document.querySelector('.files .spinner'), null, { timeout: 60000 });
+const filesTxt = await page.textContent('.files');
+ok(filesTxt.includes('2026-01'), 'PDF.js extrae texto y detecta período');
+ok(/2 pág\. \(1 escaneada\)/.test(filesTxt) && filesTxt.includes('2026-03'), 'PDF mixto: página de texto leída y página escaneada detectada');
 await page.check('#consent');
 await page.screenshot({ path: `${SHOTS}/1-carga.png` });
+await page.screenshot({ path: `${SHOTS}/1-carga-full.png`, fullPage: true });
 await page.click('[data-act="interpret"]');
 await page.waitForSelector('text=Confirmar datos >> nth=0');
 await page.waitForFunction(() => document.querySelector('.stage-head .k')?.textContent.includes('Etapa 2'));
-ok(true, 'Interpretación de 2 meses y paso a confirmar datos');
+ok(true, 'Interpretación de 3 meses y paso a confirmar datos');
+ok((await page.evaluate(() => window.__calls)).includes('interpret+1img') && (await page.evaluate(() => window.__imageBytes)) > 20000, 'La página escaneada se envía a Claude como imagen JPEG');
+ok((await page.$$('.pill.scan')).length === 5, 'Movimientos leídos de la imagen marcados como «Escaneado»');
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
 ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría > $5,000');
@@ -116,7 +126,7 @@ await page.click('[data-go="8"]:not(.step)');
 await page.click('[data-act="dl-html"]'); await page.click('[data-act="dl-json"]');
 const saved = await page.evaluate(() => window.__saved);
 ok(saved.length === 2 && saved[0].data.includes('<svg') && saved[0].data.includes('$566,000.00'), 'HTML descargado con gráficos y mismos saldos');
-ok(!/sk-ant|apiKey/.test(saved[1].data) && JSON.parse(saved[1].data).months.length === 2, 'JSON sin credenciales con mapeo');
+ok(!/sk-ant|apiKey/.test(saved[1].data) && JSON.parse(saved[1].data).months.length === 3, 'JSON sin credenciales con mapeo');
 fs.writeFileSync(`${SHOTS}/reporte.html`, saved[0].data);
 await page.click('[data-act="close"]');
 await page.reload();
@@ -131,7 +141,7 @@ const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
 await mob.route('https://cdnjs.cloudflare.com/**', r => r.fulfill({ path: path.join(PDFJS, path.basename(new URL(r.request().url()).pathname)), contentType: 'text/javascript' }));
 await mob.addInitScript(MOCK);
 await mob.goto('file://' + path.join(ROOT, 'dist/index.html'));
-await mob.waitForSelector('#c-name');
+await mob.waitForSelector('#pdf-in', { state: 'attached' });
 const sw = await mob.evaluate(() => document.documentElement.scrollWidth);
 ok(sw <= 390, `Sin scroll horizontal en móvil (${sw}px)`);
 await mob.screenshot({ path: `${SHOTS}/movil.png` });

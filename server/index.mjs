@@ -92,8 +92,10 @@ async function handleConnect(req, res, user) {
 const hash = s => crypto.createHash('sha256').update(s).digest('hex').slice(0, 10);
 
 async function handleAI(req, res, user) {
-  const { op, payload } = await body(req);
+  const { op, payload, images = [] } = await body(req, 60 * 1024 * 1024);
   if (!AI_OPS.includes(op) || !payload || typeof payload !== 'object') return json(res, 400, { code: 'bad_request', message: 'Operación o datos inválidos.' });
+  if (!Array.isArray(images) || images.length > 20 || images.some(b => typeof b !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(b) || b.length > 7_000_000)) return json(res, 400, { code: 'bad_request', message: 'Imágenes inválidas (máximo 20 JPEG por solicitud).' });
+  if (images.length && op !== 'interpret') return json(res, 400, { code: 'bad_request', message: 'Solo la interpretación admite imágenes.' });
   const key = getKey(user);
   if (!key) return json(res, 400, { code: 'not_connected', message: 'Conecta Claude primero.' });
   let prompt;
@@ -109,7 +111,7 @@ async function handleAI(req, res, user) {
   const hb = setInterval(() => send('progress', { message: text ? 'Recibiendo respuesta…' : 'Claude está analizando…', chars: text.length, elapsed: Math.round((Date.now() - started) / 1000) }), 8000);
   const to = setTimeout(() => ctl.abort('timeout'), TIMEOUT[op]);
   try {
-    const r = await fetch(`${API}/v1/messages`, { method: 'POST', headers: anthropicHeaders(key), signal: ctl.signal, body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS[op], stream: true, system: prompt.system, messages: [{ role: 'user', content: prompt.user }] }) });
+    const r = await fetch(`${API}/v1/messages`, { method: 'POST', headers: anthropicHeaders(key), signal: ctl.signal, body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS[op], stream: true, system: prompt.system, messages: [{ role: 'user', content: [...images.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } })), { type: 'text', text: prompt.user }] }] }) });
     if (!r.ok) { const t = await r.text(); throw Object.assign(new Error(), classify(r.status, t)); }
     const ct = r.headers.get('content-type') || '';
     if (ct.includes('text/html')) throw Object.assign(new Error(), { code: 'html_response', message: 'Respuesta HTML inesperada.' });
@@ -131,7 +133,7 @@ async function handleAI(req, res, user) {
     if (stop === 'max_tokens') throw Object.assign(new Error(), { code: 'truncated', message: 'Respuesta truncada por límite de salida.' });
     if (!stop) throw Object.assign(new Error(), { code: 'interrupted', message: 'La respuesta se interrumpió.' });
     validateResult(op, parseJsonText(text), payload); // validación del servidor
-    console.log(JSON.stringify({ at: new Date().toISOString(), action: op, model: MODEL, user: hash(user), input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, ms: Date.now() - started }));
+    console.log(JSON.stringify({ at: new Date().toISOString(), action: op, images: images.length, model: MODEL, user: hash(user), input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, ms: Date.now() - started }));
     send('result', { text, usage, model: MODEL });
   } catch (e) {
     const code = ctl.signal.aborted ? (ctl.signal.reason === 'timeout' ? 'timeout' : 'cancelled') : (e.code || 'interrupted');

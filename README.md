@@ -32,7 +32,9 @@ Aplicación web en español de 8 etapas: carga de PDFs → confirmación de dato
 
 ## Supuestos declarados
 - Tiempo máximo: 3 min para analyze/report/alert; 5 min para interpret (un estado de cuenta largo genera mucha salida).
-- Campos numéricos opcionales (departamentos, cuota, deuda morosa) para calcular recaudación y morosidad de forma reproducible.
+- Datos del condominio fijos en `web/app.js` (`CONDO`): Condominio Hampton Court, Mar de la Tranquilidad 35, Col. Los Olivos, Coyoacán, CDMX, 80 departamentos. Sin cuota ordinaria ni deuda morosa capturadas, la tasa de recaudación y el índice de morosidad no se calculan.
+- PDFs de texto, escaneados o mixtos: cada página con poco texto (o con imágenes y poco texto) se renderiza a JPEG en el navegador y Claude la lee como imagen. Las imágenes viven solo en memoria: tras recargar, hay que volver a cargar el PDF para reinterpretar páginas escaneadas. Los movimientos leídos de imagen se marcan «Escaneado» para verificación.
+- Identidad visual tomada del escudo del condominio (`web/assets/`), tema claro.
 - Respuestas de categoría/monto en aclaraciones se aplican con el motor; respuestas de texto exigen reinterpretar el mes con Claude y volver a confirmar.
 - En claude.ai no se informan tokens a la página: el registro muestra una estimación (caracteres ÷ 4) marcada con *.
 - El servidor valida JSON con esquema propio (`validateResult`) en lugar de depender de salidas estructuradas de la API.

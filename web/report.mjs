@@ -6,7 +6,7 @@ const para = s => String(s || '').split(/\n{2,}|\n/).filter(x => x.trim()).map(x
 const fmtPct = v => (v === null || v === undefined ? '—' : `${Number(v).toLocaleString('es-MX', { maximumFractionDigits: 1 })}%`);
 
 // Gráfico de evolución de saldo bancario (inicial del primer mes + finales de cada mes).
-export function svgBalance(months, { accent = '#2bb673' } = {}) {
+export function svgBalance(months, { accent = '#a5532a' } = {}) {
   const pts = [];
   if (months.length && months[0].initialBalance !== null) pts.push({ label: `Inicio ${months[0].period}`, short: 'Inicio', v: months[0].initialBalance });
   for (const m of months) if (m.finalBalance !== null) pts.push({ label: m.period, short: m.period.slice(2).replace('-', '/'), v: m.finalBalance });
@@ -44,7 +44,7 @@ function compact(v) {
 }
 
 // Composición de egresos del período: barras horizontales ordenadas.
-export function svgComposition(list, { accent = '#2bb673' } = {}) {
+export function svgComposition(list, { accent = '#a5532a' } = {}) {
   if (!list.length) return '<p class="muted">Sin egresos en el período.</p>';
   const items = list.slice(0, 10);
   const rest = list.slice(10).reduce((s, x) => s + x.amount, 0);
@@ -85,30 +85,32 @@ export function kpiGrid(ind) {
 }
 
 const DOC_CSS = `
-body{font-family:"Instrument Sans","Segoe UI",system-ui,sans-serif;color:#12223a;background:#fff;margin:0;line-height:1.55;font-size:14.5px}
+body{font-family:"Instrument Sans","Segoe UI",system-ui,sans-serif;color:#23211a;background:#fff;margin:0;line-height:1.55;font-size:14.5px}
 .page{max-width:900px;margin:0 auto;padding:36px 28px 60px}
-h1,h2,h3{font-family:"Familjen Grotesk","Segoe UI",system-ui,sans-serif;letter-spacing:-.01em;color:#0b1628}
-h1{font-size:26px;margin:4px 0 10px}h2{font-size:18px;margin:30px 0 10px;padding-bottom:6px;border-bottom:2px solid #0b1628}h3{font-size:15px;margin:0}
-p{margin:0 0 10px}.eyebrow{font:600 11px/1.2 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:#1b8f5a}
-.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 18px;font-size:13px;margin:14px 0;padding:12px 14px;background:#f1f5fb;border-radius:8px}
-.meta b{display:block;font-size:11px;color:#5b6b84;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
-table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #dde4ef;padding:6px 8px;text-align:left;vertical-align:top}
-th{background:#f1f5fb;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#4b5b74}td.n,th.n{text-align:right;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+h1,h2,h3{font-family:"Instrument Sans","Segoe UI",system-ui,sans-serif;letter-spacing:-.01em;color:#23211a}
+h1{font-family:"Cinzel",Georgia,serif;font-weight:700;letter-spacing:.02em}
+.dochead{display:flex;gap:16px;align-items:center;margin-bottom:6px}.dochead img{flex:none;height:auto}
+h1{font-size:26px;margin:4px 0 10px}h2{font-size:18px;margin:30px 0 10px;padding-bottom:6px;border-bottom:2px solid #23211a}h3{font-size:15px;margin:0}
+p{margin:0 0 10px}.eyebrow{font:600 11px/1.2 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:#7f3c1b}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 18px;font-size:13px;margin:14px 0;padding:12px 14px;background:#f4efe6;border-radius:8px}
+.meta b{display:block;font-size:11px;color:#7b7363;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #e2d8c7;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f4efe6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#5f5d52}td.n,th.n{text-align:right;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 tr.flag td{background:#fff1f1}.tbl-wrap{overflow-x:auto}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #dde4ef;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#5b6b84}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
-.chart{width:100%;height:auto;color:#33465f;margin:6px 0 14px}
-.finding{border:1px solid #dde4ef;border-left:4px solid #888;border-radius:8px;padding:12px 14px;margin:10px 0}.finding.critical{border-left-color:#d64545}.finding.moderate{border-left-color:#d08a12}.finding.observation{border-left-color:#3d78d8}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
+.chart{width:100%;height:auto;color:#4f4a3e;margin:6px 0 14px}
+.finding{border:1px solid #e2d8c7;border-left:4px solid #888;border-radius:8px;padding:12px 14px;margin:10px 0}.finding.critical{border-left-color:#d64545}.finding.moderate{border-left-color:#d08a12}.finding.observation{border-left-color:#3d78d8}
 .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;margin-left:6px}.pill.critical{background:#fde3e3;color:#a62626}.pill.moderate{background:#fdf0d6;color:#8a5b07}.pill.observation{background:#e2ecfd;color:#2a5bb0}
-.src{font:600 9.5px "IBM Plex Mono",monospace;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;vertical-align:1px}.src.pdf{color:#7b4fc9}.src.motor{color:#0f7f93}.src.user{color:#a66b00}.src.ia{color:#1b8f5a}
-.note{border:1px solid #c9d4e5;border-radius:10px;padding:18px 20px;background:#fbfcfe}.muted{color:#5b6b84;font-size:12.5px}
-.approval{border:1px dashed #1b8f5a;border-radius:8px;padding:10px 14px;background:#f2fbf6;font-size:13px}
-.printbar{position:sticky;top:0;background:#0b1628;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;justify-content:space-between;font-size:13px}
-.printbar button{background:#2bb673;border:0;color:#062a1a;font-weight:700;padding:8px 14px;border-radius:6px;cursor:pointer}
+.src{font:600 9.5px "IBM Plex Mono",monospace;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;vertical-align:1px}.src.pdf{color:#7b4fc9}.src.motor{color:#0f7f93}.src.user{color:#a66b00}.src.ia{color:#7f3c1b}
+.note{border:1px solid #d8ccb8;border-radius:10px;padding:18px 20px;background:#fffdf9}.muted{color:#7b7363;font-size:12.5px}
+.approval{border:1px dashed #7f3c1b;border-radius:8px;padding:10px 14px;background:#f3f5ea;font-size:13px}
+.printbar{position:sticky;top:0;background:#23211a;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;justify-content:space-between;font-size:13px}
+.printbar button{background:#a5532a;border:0;color:#fffaf3;font-weight:700;padding:8px 14px;border-radius:6px;cursor:pointer}
 @media print{.printbar{display:none}.page{padding:0}h2{break-after:avoid}.finding,.note,table{break-inside:avoid}}
 `;
 
 // Cuerpo del reporte (compartido por la vista previa y el HTML descargable).
-export function reportBody(S, ind, { includeNote = false } = {}) {
+export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   const R = S.report?.ai || {};
   const sel = S.selection || [];
   const props = S.diagnosis?.ai?.findings || [];
@@ -131,19 +133,19 @@ export function reportBody(S, ind, { includeNote = false } = {}) {
   const rv = S.review;
   const note = S.alert?.ai;
   return `
-  <div class="eyebrow">Condominio / Análisis de estados de cuenta</div>
-  <h1>Reporte ejecutivo — ${esc(S.condo.name)}</h1>
-  <div class="meta"><div><b>Condominio</b>${esc(S.condo.name)}</div><div><b>Período</b>${esc(ind.periodFrom)}${ind.periodTo !== ind.periodFrom ? ` a ${esc(ind.periodTo)}` : ''}</div><div><b>Fecha de análisis</b>${esc((S.report?.at || '').slice(0, 10))}</div><div><b>Administrador</b>${esc(S.condo.administrator || 'No indicado')}</div><div><b>Banco</b>${esc(S.meta.bank || 'No indicado')} · ${esc(S.meta.currency || 'MXN')}</div><div><b>Revisor</b>${rv?.approvedAt ? esc(rv.reviewer) : 'Pendiente'}</div></div>
+  <div class="dochead">${logo ? `<img src="${logo}" alt="Escudo del Condominio Hampton Court" width="72" height="73">` : ''}<div><div class="eyebrow">Análisis de estados de cuenta</div>
+  <h1>Reporte ejecutivo — ${esc(S.condo.name)}</h1></div></div>
+  <div class="meta"><div><b>Condominio</b>${esc(S.condo.name)}</div><div><b>Período</b>${esc(ind.periodFrom)}${ind.periodTo !== ind.periodFrom ? ` a ${esc(ind.periodTo)}` : ''}</div><div><b>Fecha de análisis</b>${esc((S.report?.at || '').slice(0, 10))}</div><div><b>Dirección</b>${esc(S.condo.address || '')}</div><div><b>Banco</b>${esc(S.meta.bank || 'No indicado')} · ${esc(S.meta.currency || 'MXN')}</div><div><b>Revisor</b>${rv?.approvedAt ? esc(rv.reviewer) : 'Pendiente'}</div></div>
   <p class="muted">Fuentes: <span class="src pdf">PDF</span> dato extraído del estado de cuenta · <span class="src motor">Motor</span> cálculo reproducible · <span class="src user">Usuario</span> anotación del revisor · <span class="src ia">IA</span> análisis redactado por Claude.</p>
   ${S.report?.status !== 'final' && !rv?.approvedAt ? '<p><span class="pill moderate">Borrador para revisión</span></p>' : ''}
   <h2>Resumen ejecutivo <span class="src ia">IA</span></h2>${para(R.executiveSummary)}
   <h2>Flujo de fondos mensual <span class="src motor">Motor</span></h2>
   ${kpiGrid(ind)}
   ${flowTable(ind)}
-  ${svgBalance(ind.months)}
+  ${svgBalance(ind.months, { accent: '#a5532a' })}
   ${para(R.flowAnalysis)}
   <h2>Análisis de egresos <span class="src motor">Motor</span> <span class="src ia">IA</span></h2>
-  ${svgComposition(ind.composition)}
+  ${svgComposition(ind.composition, { accent: '#a5532a' })}
   ${ind.categoryChanges.filter(c => c.flagged).length ? `<div class="tbl-wrap"><table><thead><tr><th>Categoría</th><th>Meses</th><th class="n">Anterior</th><th class="n">Actual</th><th class="n">Variación</th></tr></thead><tbody>${ind.categoryChanges.filter(c => c.flagged).map(c => `<tr><td>${esc(c.label)}</td><td>${esc(c.from)} → ${esc(c.to)}</td><td class="n">${fmtMXN(c.prev)}</td><td class="n">${fmtMXN(c.cur)}</td><td class="n">${fmtPct(c.changePct)}</td></tr>`).join('')}</tbody></table></div><p class="muted">Variaciones mensuales mayores a 20%.</p>` : ''}
   ${para(R.expenseAnalysis)}
   <h2>Estado de fondos especiales <span class="src motor">Motor</span></h2>
@@ -173,6 +175,6 @@ export function alertBody(n, S) {
   </div>`;
 }
 
-export function standaloneReport(S, ind, { preview = false } = {}) {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@600;700&family=IBM+Plex+Mono:wght@400;600&family=Instrument+Sans:wght@400;600&display=swap"><title>Reporte ${esc(S.condo.name)} ${esc(ind.periodFrom)}–${esc(ind.periodTo)}</title><style>${DOC_CSS}</style></head><body>${preview ? '' : `<div class="printbar"><span>Reporte ejecutivo condominial · ${esc(S.condo.name)}</span><button onclick="window.print()">Imprimir / Guardar PDF</button></div>`}<div class="page">${reportBody(S, ind, { includeNote: !preview || !!S.alert?.acceptedAt })}<p class="muted" style="margin-top:28px">Generado con Condominio / Análisis de estados de cuenta — Workflow con IA. Caso ${esc(S.caseId)}. Cierre: ${S.closedAt ? esc(new Date(S.closedAt).toLocaleString('es-MX')) : 'pendiente'}.</p></div></body></html>`;
+export function standaloneReport(S, ind, { preview = false, logo = '' } = {}) {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=IBM+Plex+Mono:wght@400;600&family=Instrument+Sans:wght@400;600&display=swap"><title>Reporte ${esc(S.condo.name)} ${esc(ind.periodFrom)}–${esc(ind.periodTo)}</title><style>${DOC_CSS}</style></head><body>${preview ? '' : `<div class="printbar"><span>Reporte ejecutivo condominial · ${esc(S.condo.name)}</span><button onclick="window.print()">Imprimir / Guardar PDF</button></div>`}<div class="page">${reportBody(S, ind, { includeNote: !preview || !!S.alert?.acceptedAt, logo })}<p class="muted" style="margin-top:28px">Generado con Condominio / Análisis de estados de cuenta — Workflow con IA. Caso ${esc(S.caseId)}. Cierre: ${S.closedAt ? esc(new Date(S.closedAt).toLocaleString('es-MX')) : 'pendiente'}.</p></div></body></html>`;
 }
