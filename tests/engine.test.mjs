@@ -87,6 +87,14 @@ test('reporte: hallazgos deben coincidir con la selección', () => {
   assert.ok(validateResult('report', rep, { findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }] }));
 });
 
+test('reporte con uno o con todos los hallazgos seleccionados', () => {
+  const mk = ids => ({ executiveSummary: 'x'.repeat(50), findings: ids.map(id => ({ id, recommendation: 'r' })), limitations: 'l' });
+  assert.ok(validateResult('report', mk(['H2']), { findings: [{ id: 'H2' }] }));
+  const all = ['H1', 'H2', 'H3', 'H4', 'H5'];
+  assert.ok(validateResult('report', mk(all), { findings: all.map(id => ({ id })) }));
+  assert.throws(() => validateResult('report', mk(['H1', 'H2']), { findings: all.map(id => ({ id })) }));
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

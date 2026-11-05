@@ -627,7 +627,9 @@ function stage2() {
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
     ${qs.length ? qs.map(q => questionView(q, catOpts)).join('') : '<p>No hay preguntas pendientes.</p>'}
   </section>
-  <section class="panel"><h2>Confirmación</h2>
+  <section class="panel"><div class="row" style="justify-content:space-between"><h2>Confirmación</h2><div class="row">
+      <button class="btn sm" data-act="check-all" ${dis(allChecked)}>Seleccionar todo</button>
+      <button class="btn sm ghost" data-act="check-none" ${dis(!Object.values(checks).some(Boolean))}>Deseleccionar todo</button></div></div>
     <div class="stack">
       ${[['currency', 'La moneda es MXN.'], ['bank', `El banco (${esc(S.meta.bank || 'sin indicar')}) y el tipo de cuenta son correctos.`], ['period', `El período cubierto (${esc(ms[0]?.period)} → ${esc(ms.at(-1)?.period)}) es correcto.`], ['categories', 'Revisé las categorías asignadas a los movimientos.'], ['funds', 'Los fondos especiales identificados son correctos.'], ['arithmetic', `Revisé el cuadre aritmético de cada mes (${ms.filter(m => !m.balanceCheck).length} con diferencia).`], ['continuity', `Revisé la continuidad de saldos entre meses (${cont.filter(c => !c.ok && c.consecutive).length} discontinuidades).`]].map(([k, t]) => `<label class="check"><input type="checkbox" id="chk-${k}" data-check="${k}" ${checks[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
     </div>
@@ -757,7 +759,7 @@ function findingCard(f, { selectable = false, selected = false } = {}) {
   ${row('impact', 'Impacto posible', f.impact ? `<p>${hlAmounts(f.impact)}</p>` : '')}
   ${row('rec', 'Acción recomendada', `<p>${hlAmounts(f.recommendation || 'Sin recomendación cuantificada por datos insuficientes.')}</p>`)}
   ${row('miss', 'Datos para confirmar', f.missingData ? `<p>${hlAmounts(f.missingData)}</p>` : '')}
-  ${selectable ? `<div class="row"><button class="btn sm ${selected ? '' : 'primary'}" data-act="toggle-sel" data-id="${esc(f.id)}" ${dis(!selected && S.selection.length >= 3)}>${selected ? 'Quitar de la selección' : 'Seleccionar'}</button></div>` : ''}
+  ${selectable ? `<div class="row"><button class="btn sm ${selected ? '' : 'primary'}" data-act="toggle-sel" data-id="${esc(f.id)}" ${dis()}>${selected ? 'Quitar de la selección' : 'Seleccionar'}</button></div>` : ''}
   </article>`;
 }
 
@@ -765,10 +767,10 @@ function findingCard(f, { selectable = false, selected = false } = {}) {
 function stage4() {
   const props = S.diagnosis.ai.findings;
   const sel = S.selection;
-  return `${head(4, 'Hallazgos prioritarios', 'Elige exactamente tres hallazgos, ordénalos por urgencia (1 = más urgente) y ajusta su nivel si lo consideras necesario. La selección es tuya: nada viene preseleccionado.')}
-  <section class="panel"><h2>Tu selección (${sel.length}/3) ${src('user')}</h2>
+  return `${head(4, 'Hallazgos prioritarios', 'Elige los hallazgos que quieres desarrollar en el reporte: al menos uno, o todos. Ordénalos por urgencia (1 = más urgente) y ajusta su nivel si lo consideras necesario. La selección es tuya: nada viene preseleccionado.')}
+  <section class="panel"><div class="row" style="justify-content:space-between"><h2>Tu selección (${sel.length} de ${props.length}) ${src('user')}</h2><div class="row"><button class="btn sm" data-act="sel-all" ${dis(sel.length === props.length)}>Seleccionar todos</button><button class="btn sm ghost" data-act="sel-none" ${dis(!sel.length)}>Quitar todos</button></div></div>
     ${sel.length ? `<ol class="order">${sel.map((s, i) => { const p = props.find(f => f.id === s.id); const hy = p.hypotheses || []; return `<li><span class="rk">${i + 1}</span><div class="stack"><strong>${esc(p.title)}</strong><div class="row"><label class="f" style="flex-direction:row;align-items:center;gap:8px">Nivel <select id="lvl-${esc(s.id)}" data-level="${esc(s.id)}" style="width:auto">${E.LEVELS.map(l => `<option value="${l}" ${l === s.level ? 'selected' : ''}>${E.LEVEL_LABEL[l]}</option>`).join('')}</select></label>${s.level !== p.level ? `<span class="pill neutral">IA proponía ${E.LEVEL_LABEL[p.level]}</span>` : ''}</div>${hy.length ? `<div class="stack">${hy.map((h, k) => `<label class="check" style="font-size:13px"><input type="checkbox" id="hy-${esc(s.id)}-${k}" data-hyp="${esc(s.id)}|${k}" ${(s.acceptedHypotheses || []).includes(k) ? 'checked' : ''} ${h.quantified ? '' : 'disabled'}><span>Hipótesis: ${esc(h.text)} ${h.quantified ? '' : '<em style="color:var(--ink-3)">(no cuantificada; no se puede aceptar)</em>'}</span></label>`).join('')}</div>` : ''}</div><div class="row"><button class="btn sm" data-act="up" data-i="${i}" aria-label="Subir" ${dis(i === 0)}>↑</button><button class="btn sm" data-act="down" data-i="${i}" aria-label="Bajar" ${dis(i === sel.length - 1)}>↓</button></div></li>`; }).join('')}</ol>` : '<p>Aún no seleccionas hallazgos.</p>'}
-    <div class="actionbar"><button class="btn primary" data-act="confirm-sel" ${dis(sel.length !== 3 || S.selectionConfirmedAt)}>${S.selectionConfirmedAt ? 'Selección confirmada' : 'Confirmar los tres hallazgos'}</button>${S.selectionConfirmedAt ? '<button class="btn" data-go="5">Ir al reporte</button>' : ''}${sel.length !== 3 ? `<span class="status">Selecciona ${3 - sel.length > 0 ? `${3 - sel.length} más` : 'solo tres'}.</span>` : ''}</div>
+    <div class="actionbar"><button class="btn primary" data-act="confirm-sel" ${dis(!sel.length || S.selectionConfirmedAt)}>${S.selectionConfirmedAt ? 'Selección confirmada' : `Confirmar ${sel.length === 1 ? 'el hallazgo seleccionado' : `los ${sel.length || ''} hallazgos seleccionados`}`}</button>${S.selectionConfirmedAt ? '<button class="btn" data-go="5">Ir al reporte</button>' : ''}${!sel.length ? '<span class="status">Selecciona al menos un hallazgo.</span>' : ''}</div>
   </section>
   <section class="panel"><h2>Hallazgos propuestos ${src('ia')}</h2>${props.map(f => findingCard(f, { selectable: true, selected: sel.some(s => s.id === f.id) })).join('')}</section>`;
 }
@@ -776,7 +778,7 @@ function stage4() {
 // ----- Etapa 5 -----
 function stage5() {
   const r = S.report;
-  return `${head(5, 'Reporte ejecutivo', 'Claude redacta el contenido con los tres hallazgos confirmados; las tablas, gráficos, fondos y morosidad provienen del motor.')}
+  return `${head(5, 'Reporte ejecutivo', 'Claude redacta el contenido con los hallazgos confirmados; las tablas, gráficos, fondos y morosidad provienen del motor.')}
   <section class="panel"><h2>Observaciones del revisor ${src('user')}</h2>
     <label class="f">Indicaciones para la redacción (opcional)<textarea id="obs" data-bind="observationsDraft" placeholder="p. ej. Enfatizar el avance de impermeabilización del edificio 2; aclarar que el pago de marzo corresponde a dos meses.">${esc(S.observationsDraft)}</textarea></label>
     ${r && (S.observationsDraft || '') !== (r.observations || '') ? '<div class="banner warn">Las observaciones cambiaron: regenera el reporte para incorporarlas. Se invalidó la aprobación y la nota.</div>' : ''}
@@ -911,7 +913,7 @@ document.addEventListener('click', async e => {
       const id = t.dataset.id;
       const i = S.selection.findIndex(s => s.id === id);
       if (i >= 0) S.selection.splice(i, 1);
-      else if (S.selection.length < 3) { const p = S.diagnosis.ai.findings.find(f => f.id === id); S.selection.push({ id, level: p.level, acceptedHypotheses: [] }); }
+      else { const p = S.diagnosis.ai.findings.find(f => f.id === id); S.selection.push({ id, level: p.level, acceptedHypotheses: [] }); }
       if (S.selectionConfirmedAt || S.report) invalidate('selection');
       log('selección', S.selection.map(s => s.id).join(', ') || '(vacía)'); save(); return render();
     }
@@ -920,6 +922,16 @@ document.addEventListener('click', async e => {
       [S.selection[i], S.selection[j]] = [S.selection[j], S.selection[i]];
       if (S.selectionConfirmedAt || S.report) invalidate('selection');
       log('orden', S.selection.map(s => s.id).join(' > ')); save(); return render();
+    }
+    case 'check-all': case 'check-none': {
+      S._checks = Object.fromEntries(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity'].map(k => [k, act === 'check-all']));
+      log('confirmación', act === 'check-all' ? 'Todas las casillas marcadas' : 'Todas las casillas desmarcadas'); save(); return render();
+    }
+    case 'sel-all': case 'sel-none': {
+      if (act === 'sel-all') { for (const p of S.diagnosis.ai.findings) if (!S.selection.some(s => s.id === p.id)) S.selection.push({ id: p.id, level: p.level, acceptedHypotheses: [] }); }
+      else S.selection = [];
+      if (S.selectionConfirmedAt || S.report) invalidate('selection');
+      log('selección', S.selection.map(s => s.id).join(', ') || '(vacía)'); save(); return render();
     }
     case 'confirm-sel': S.selectionConfirmedAt = now(); log('selección_confirmada', S.selection.map(s => `${s.id}:${s.level}`).join(', ')); save(); return render();
     case 'report': return runReport();
