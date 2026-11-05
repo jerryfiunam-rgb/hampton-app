@@ -48,7 +48,7 @@ const MOCK = () => {
         'La numeración de cuotas de mantenimiento repite el número 58 (dos renglones); en total hay 75 renglones listados.' ] : [] };
     } else if (op === 'analyze') {
       const c = JSON.parse(between(prompt, 'candidatos_motor'));
-      out = { executiveSummary: 'Resumen simulado del diagnóstico para pruebas automatizadas del flujo.', trends: ['Tendencia simulada'], comparabilityNote: '', findings: c.slice(0, 5).map((a, i) => ({ id: `H${i + 1}`, title: a.title, description: a.detail, evidence: a.evidence, category: 'NO_CLASIFICADO', level: a.level, kind: a.kind, impact: 'Impacto simulado', recommendation: 'Recomendación simulada', missingData: '', hypotheses: [{ text: 'Hipótesis simulada cuantificada', quantified: true }], sourceRule: a.id })) };
+      out = { executiveSummary: 'Resumen simulado: el período cierra con saldo de $561,400.00 y presenta dos descuadres que deben aclararse antes de la Asamblea.', facts: [{ text: 'El saldo final de 2026-01 es $566,000.00 y el saldo inicial de 2026-02 es $564,000.00.', source: 'pdf' }, { text: 'El motor calcula un descuadre de $1,000.00 en 2026-02.', source: 'motor' }], interpretation: ['La discontinuidad sugiere que falta registrar un movimiento entre ambos cortes, lo que impide afirmar que los saldos reflejan la realidad de la cuenta.', 'El gasto de jardinería de febrero duplica el de enero.'], hypotheses: [{ text: 'Podría tratarse de una comisión bancaria no reflejada en el estado.', quantified: false }], comparabilityNote: '', findings: c.slice(0, 5).map((a, i) => ({ id: `H${i + 1}`, title: a.title, facts: [a.detail], interpretation: 'Interpretación simulada del hallazgo.', description: a.detail, evidence: a.evidence, category: 'NO_CLASIFICADO', level: a.level, kind: a.kind, impact: 'Impacto simulado', recommendation: 'Recomendación simulada', missingData: '', hypotheses: [{ text: 'Hipótesis simulada cuantificada', quantified: true }], sourceRule: a.id })) };
     } else if (op === 'report') {
       const f = JSON.parse(between(prompt, 'hallazgos_confirmados'));
       out = { executiveSummary: 'Resumen ejecutivo simulado con extensión suficiente para pasar la validación del reporte.', flowAnalysis: 'Flujo simulado.', expenseAnalysis: 'Egresos simulados.', fundsAnalysis: 'Fondos simulados.', delinquencyAnalysis: 'Sin datos de morosidad.', findings: f.map(x => ({ id: x.id, title: x.title, level: x.level, narrative: 'Narrativa simulada.', evidenceSummary: 'Evidencia simulada.', recommendation: 'Recomendación simulada.', missingData: '' })), limitations: 'Limitaciones simuladas.' };
@@ -113,6 +113,11 @@ ok(/Discontinuidad de saldo 2026-01 → 2026-02/.test(d) && d.includes('$2,000.0
 ok(/Pago duplicado probable/.test(d), 'Regla de duplicado probable (jardinería)');
 ok(/Sin pago de honorarios/.test(d), 'Regla de honorarios ausentes');
 await page.screenshot({ path: `${SHOTS}/3-diagnostico.png`, fullPage: true });
+ok((await page.$$('.plane.fact li')).length === 2 && (await page.$$('.plane.interp li')).length === 2 && (await page.$$('.plane.hyp li')).length === 1, 'Diagnóstico separado en hechos, interpretación e hipótesis');
+ok((await page.$$('.finding .frow.fact')).length === 5 && (await page.$$('.finding .frow.interp')).length === 5, 'Cada hallazgo separa hechos e interpretación');
+ok(await page.$eval('.plane.interp li span', el => getComputedStyle(el).textAlign) === 'justify', 'Texto justificado');
+await (await page.$('.planes')).screenshot({ path: `${SHOTS}/planos.png` });
+await (await page.$('.finding')).screenshot({ path: `${SHOTS}/hallazgo.png` });
 await page.click('text=Continuar a hallazgos');
 ok((await page.$$('.finding.sel')).length === 0, 'Selección no precargada');
 for (const id of ['H2', 'H1', 'H3']) await page.click(`[data-act="toggle-sel"][data-id="${id}"]`);

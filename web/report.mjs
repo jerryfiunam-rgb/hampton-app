@@ -91,7 +91,7 @@ h1,h2,h3{font-family:"Instrument Sans","Segoe UI",system-ui,sans-serif;letter-sp
 h1{font-family:"Cinzel",Georgia,serif;font-weight:700;letter-spacing:.02em}
 .dochead{display:flex;gap:16px;align-items:center;margin-bottom:6px}.dochead img{flex:none;height:auto}
 h1{font-size:26px;margin:4px 0 10px}h2{font-size:18px;margin:30px 0 10px;padding-bottom:6px;border-bottom:2px solid #23211a}h3{font-size:15px;margin:0}
-p{margin:0 0 10px}.eyebrow{font:600 11px/1.2 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:#7f3c1b}
+p{margin:0 0 10px;text-align:justify;hyphens:auto}li{text-align:justify;hyphens:auto}.eyebrow{font:600 11px/1.2 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:#7f3c1b}
 .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 18px;font-size:13px;margin:14px 0;padding:12px 14px;background:#f4efe6;border-radius:8px}
 .meta b{display:block;font-size:11px;color:#7b7363;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
 table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #e2d8c7;padding:6px 8px;text-align:left;vertical-align:top}

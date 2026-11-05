@@ -414,7 +414,7 @@ async function runReport() {
   errors.report = null;
   const obs = S.observationsDraft || '';
   try {
-    const ai = await callAI('report', { condo: condoForAI(), indicators: indicators(), diagnosis: { executiveSummary: S.diagnosis.ai.executiveSummary, trends: S.diagnosis.ai.trends, comparabilityNote: S.diagnosis.ai.comparabilityNote }, findings: selectedFindings(), observations: obs }, 'report');
+    const ai = await callAI('report', { condo: condoForAI(), indicators: indicators(), diagnosis: { executiveSummary: S.diagnosis.ai.executiveSummary, facts: S.diagnosis.ai.facts, interpretation: S.diagnosis.ai.interpretation || S.diagnosis.ai.trends, hypotheses: S.diagnosis.ai.hypotheses, comparabilityNote: S.diagnosis.ai.comparabilityNote }, findings: selectedFindings(), observations: obs }, 'report');
     invalidate('report');
     S.report = { at: now(), ai, observations: obs, status: 'draft' };
     log('reporte', 'Reporte generado (borrador para revisión)');
@@ -712,7 +712,7 @@ function stage3() {
     <h3>Reglas disparadas por el motor (${an.length}) ${src('motor')}</h3>
     ${an.length ? `<div class="tbl-wrap"><table><thead><tr><th>Id</th><th>Nivel</th><th>Regla</th><th>Detalle</th></tr></thead><tbody>${an.map(a => `<tr><td class="mono">${a.id}</td><td><span class="pill ${a.level}">${E.LEVEL_LABEL[a.level]}</span></td><td>${esc(a.title)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div>` : '<p>Ninguna regla de anomalía se disparó con los datos confirmados.</p>'}
   </section>
-  ${ai ? `<section class="panel"><h2>Resumen ejecutivo ${src('ia')}</h2><p>${esc(ai.executiveSummary)}</p>${(ai.trends || []).length ? `<h3>Tendencias</h3><ul>${ai.trends.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}${ai.comparabilityNote ? `<p class="lead">${esc(ai.comparabilityNote)}</p>` : ''}</section>
+  ${ai ? `${diagnosisReading(ai, an)}
   <section class="panel"><h2>Hallazgos propuestos (${ai.findings.length}) ${src('ia')}</h2>${ai.findings.map(f => findingCard(f)).join('')}</section>` : ''}
   <div class="actionbar">
     <button class="btn ${ai ? '' : 'primary'}" data-act="analyze" ${dis()}>${ai ? 'Regenerar diagnóstico' : 'Generar diagnóstico con Claude'}</button>
@@ -722,14 +722,41 @@ function stage3() {
   </div>`;
 }
 
+// Lectura del diagnóstico en tres planos visualmente distintos: hechos, interpretación e hipótesis.
+function diagnosisReading(ai, an) {
+  const legacy = !(ai.facts || []).length;
+  const facts = legacy ? an.map(a => ({ text: a.detail, source: 'motor' })) : ai.facts;
+  const interp = (ai.interpretation || ai.trends || []).filter(Boolean);
+  const hyps = ai.hypotheses || [];
+  return `<section class="panel"><h2>Resumen ejecutivo ${src('ia')}</h2><p class="summary">${hlAmounts(ai.executiveSummary)}</p>
+    ${ai.comparabilityNote ? `<p class="lead">${esc(ai.comparabilityNote)}</p>` : ''}
+    ${legacy ? '<div class="banner warn">Este diagnóstico se generó con el formato anterior. Los hechos mostrados provienen del motor; regenera el diagnóstico para que Claude separe hechos, interpretación e hipótesis.</div>' : ''}
+    <div class="planes">
+      ${planeBlock('fact', 'Hechos', 'Verificables contra el estado de cuenta o calculados por el motor', facts.map(f => `<li>${src(f.source === 'pdf' ? 'pdf' : 'motor')}<span>${hlAmounts(f.text)}</span></li>`))}
+      ${planeBlock('interp', 'Interpretación', 'Lo que Claude concluye a partir de los hechos', interp.map(t => `<li><span>${hlAmounts(t)}</span></li>`))}
+      ${planeBlock('hyp', 'Hipótesis', 'Posibles causas por confirmar; no son hechos', hyps.map(h => `<li><span>${hlAmounts(h.text)}</span>${h.quantified ? ' <span class="pill neutral">cuantificada</span>' : ''}</li>`))}
+    </div></section>`;
+}
+function planeBlock(kind, title, sub, items) {
+  if (!items.length) return '';
+  return `<section class="plane ${kind}"><header><span class="plane-k">${title}</span><span class="plane-s">${sub}</span></header><ul>${items.join('')}</ul></section>`;
+}
+
 function findingCard(f, { selectable = false, selected = false } = {}) {
   const mv = new Map(allMovements().map(m => [m.id, m]));
-  return `<article class="finding ${esc(f.level)} ${selected ? 'sel' : ''}"><div class="hd"><span class="pill ${esc(f.level)}">${E.LEVEL_LABEL[f.level]}</span><h3>${esc(f.title)}</h3><span class="mono" style="font-size:12px;color:var(--ink-3)">${esc(f.id)} · ${esc(E.catLabel(f.category))} · ${esc(f.kind || '')}</span></div>
-  <p>${esc(f.description)}</p>
-  <div class="ev"><b>Evidencia ${src('pdf')}</b><ul>${(f.evidence || []).map(id => mv.get(id)).filter(Boolean).map(m => `<li class="mono" style="font-size:12.5px">${esc(m.date)} · ${esc(m.concept)} · ${E.fmtMXN(m.amount)} (${esc(m.type)})</li>`).join('')}</ul></div>
-  ${f.impact ? `<p class="ev"><b>Impacto posible:</b> ${esc(f.impact)}</p>` : ''}
-  <p class="ev"><b>Acción recomendada:</b> ${esc(f.recommendation || 'Sin recomendación cuantificada por datos insuficientes.')}</p>
-  ${f.missingData ? `<p class="ev"><b>Datos para confirmar:</b> ${esc(f.missingData)}</p>` : ''}
+  const rule = (S.diagnosis?.anomalies || []).find(a => a.id === f.sourceRule);
+  const facts = [...(f.facts || [])];
+  if (!facts.length && rule) facts.push(rule.detail);
+  const ev = (f.evidence || []).map(id => mv.get(id)).filter(Boolean);
+  const interp = f.interpretation || f.description;
+  const row = (k, label, body) => body ? `<div class="frow ${k}"><span class="flabel">${label}</span><div class="fbody">${body}</div></div>` : '';
+  return `<article class="finding ${esc(f.level)} ${selected ? 'sel' : ''}"><div class="hd"><span class="pill ${esc(f.level)}">${E.LEVEL_LABEL[f.level]}</span><h3>${esc(f.title)}</h3><span class="mono" style="font-size:12px;color:var(--ink-3)">${esc(f.id)} · ${esc(E.catLabel(f.category))}</span></div>
+  ${row('fact', 'Hechos', `${facts.length ? `<ul>${facts.map(t => `<li>${hlAmounts(t)}</li>`).join('')}</ul>` : ''}${ev.length ? `<div class="tbl-wrap evt"><table><thead><tr><th>Fecha</th><th>Movimiento ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td class="mono">${esc(m.date)}</td><td>${esc(m.concept)}</td><td>${esc(m.type)}</td><td class="n">${E.fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>` : ''}`)}
+  ${row('interp', 'Interpretación', interp ? `<p>${hlAmounts(interp)}</p>` : '')}
+  ${row('hyp', 'Hipótesis', (f.hypotheses || []).length ? `<ul>${f.hypotheses.map(h => `<li>${hlAmounts(h.text)}${h.quantified ? ' <span class="pill neutral">cuantificada</span>' : ''}</li>`).join('')}</ul>` : '')}
+  ${row('impact', 'Impacto posible', f.impact ? `<p>${hlAmounts(f.impact)}</p>` : '')}
+  ${row('rec', 'Acción recomendada', `<p>${hlAmounts(f.recommendation || 'Sin recomendación cuantificada por datos insuficientes.')}</p>`)}
+  ${row('miss', 'Datos para confirmar', f.missingData ? `<p>${hlAmounts(f.missingData)}</p>` : '')}
   ${selectable ? `<div class="row"><button class="btn sm ${selected ? '' : 'primary'}" data-act="toggle-sel" data-id="${esc(f.id)}" ${dis(!selected && S.selection.length >= 3)}>${selected ? 'Quitar de la selección' : 'Seleccionar'}</button></div>` : ''}
   </article>`;
 }
@@ -987,5 +1014,6 @@ function askExplanation(entry) {
   $('#ex-skip').onclick = () => bg.remove();
 }
 
+try { document.documentElement.lang = 'es'; } catch {}
 render();
 initAI();

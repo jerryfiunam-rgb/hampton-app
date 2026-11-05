@@ -232,3 +232,50 @@ details.log .inner { padding: 0 16px 16px; display: flex; flex-direction: column
 .ng.verificacion li { border-left-color: var(--ivy); }
 .amt { font-family: var(--f-mono); font-size: .95em; color: var(--ink); white-space: nowrap; }
 @media (min-width: 900px) { .notes-b { grid-template-columns: repeat(2, minmax(0, 1fr)); } .notes-b .ng.inconsistencia { grid-column: 1 / -1; } }
+
+/* Texto justificado en toda la aplicación (párrafos y listas; no en tablas, botones ni encabezados) */
+p, li, .lead, .banner, .check > span, .ng li p, .fbody, .plane li > span:last-child { text-align: justify; text-justify: inter-word; hyphens: auto; -webkit-hyphens: auto; }
+.topbar, .topbar *, .drop, .drop * { text-align: center; }
+.topbar p, .drop p { text-align: center; }
+.lead { max-width: 75ch; }
+.summary { font-size: 15.5px; line-height: 1.6; max-width: 80ch; }
+
+/* Diagnóstico: tres planos */
+.planes { display: grid; gap: 14px; }
+.plane { border-radius: var(--r); padding: 14px 16px; display: grid; gap: 10px; }
+.plane header { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.plane-k { font-family: var(--f-mono); font-size: 12.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.plane-s { font-size: 12.5px; color: var(--ink-3); }
+.plane ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.plane li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 14.5px; line-height: 1.55; }
+.plane li::before { content: ""; width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; align-self: start; }
+.plane.fact { background: #eef3f3; border: 1px solid #c4d8db; }
+.plane.fact .plane-k { color: var(--src-motor); }
+.plane.fact li { grid-template-columns: auto auto minmax(0, 1fr); color: var(--ink); }
+.plane.fact li::before { background: var(--src-motor); border-radius: 2px; }
+.plane.interp { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--brick); }
+.plane.interp .plane-k { color: var(--brick-deep); }
+.plane.interp li { color: var(--ink-2); font-family: Georgia, "Times New Roman", serif; font-size: 15.5px; }
+.plane.interp li::before { background: var(--brick); }
+.plane.hyp { background: transparent; border: 1.5px dashed #9fb3c9; }
+.plane.hyp .plane-k { color: var(--obs); }
+.plane.hyp li { color: var(--ink-2); font-style: italic; }
+.plane.hyp li::before { background: transparent; border: 1.5px solid var(--obs); }
+
+/* Hallazgo: filas etiquetadas por plano */
+.frow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 16px; padding: 10px 0; border-top: 1px solid var(--line); }
+.flabel { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); padding-top: 3px; }
+.fbody { min-width: 0; display: grid; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.fbody p { margin: 0; }
+.fbody ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.frow.fact .flabel { color: var(--src-motor); }
+.frow.fact .fbody { color: var(--ink); }
+.frow.fact .fbody > ul { background: #eef3f3; border-radius: 8px; padding: 8px 12px 8px 28px; }
+.frow.interp .flabel { color: var(--brick-deep); }
+.frow.interp .fbody { font-family: Georgia, "Times New Roman", serif; font-size: 15px; color: var(--ink-2); }
+.frow.hyp .flabel { color: var(--obs); }
+.frow.hyp .fbody { font-style: italic; }
+.frow.rec .flabel { color: var(--ivy); }
+.frow.rec .fbody { color: var(--ink); font-weight: 500; }
+.evt table { font-size: 12.5px; }
+@media (max-width: 640px) { .frow { grid-template-columns: minmax(0, 1fr); } }
