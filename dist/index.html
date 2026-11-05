@@ -98,6 +98,8 @@ p { margin: 0; }
 
 label.f { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); }
 label.f .hint { font-size: 12px; color: var(--ink-3); }
+label.f > .src, .mini > .src, .kpi .l > .src { align-self: flex-start; }
+label.f > .src, .mini > .src { margin-top: -2px; }
 input[type=text], input[type=number], input[type=password], select, textarea {
   background: #fffdf9; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; min-width: 0; }
 textarea { resize: vertical; min-height: 90px; }
@@ -212,6 +214,31 @@ details.log .inner { padding: 0 16px 16px; display: flex; flex-direction: column
 .muted { color: var(--ink-3); font-size: 13px; }
 .doc .note { border: 1px solid #d8ccb8; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
 .doc .muted { color: #7b7363; }
+
+/* Observaciones de Claude en la confirmación de datos */
+.notes { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.notes > summary { cursor: pointer; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; list-style: none; }
+.notes > summary::-webkit-details-marker { display: none; }
+.notes > summary::before { content: "▸"; color: var(--ink-3); margin-right: -6px; transition: transform .15s; }
+.notes[open] > summary::before { transform: rotate(90deg); }
+.notes-t { font-weight: 600; font-size: 14px; flex: 1; display: inline-flex; gap: 8px; align-items: center; }
+.notes-c { display: flex; flex-wrap: wrap; gap: 6px; }
+.nk { font-size: 12px; padding: 1px 9px; border-radius: 999px; font-weight: 600; border: 1px solid transparent; }
+.nk.inconsistencia { background: var(--mod-soft); color: var(--mod); }
+.nk.hipotesis { background: var(--obs-soft); color: var(--obs); }
+.nk.lectura { background: var(--surface-3); color: var(--ink-2); }
+.nk.verificacion { background: var(--ivy-soft); color: var(--ivy); }
+.notes-b { padding: 0 14px 14px; display: grid; gap: 14px; }
+.ng h4 { margin: 0 0 8px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+.ng ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ng li { border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: 9px 12px; display: grid; gap: 3px; max-width: 80ch; }
+.ng li strong { font-size: 14px; color: var(--ink); }
+.ng li p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.ng.inconsistencia li { border-left-color: var(--mod); }
+.ng.hipotesis li { border-left-color: var(--obs); }
+.ng.verificacion li { border-left-color: var(--ivy); }
+.amt { font-family: var(--f-mono); font-size: .95em; color: var(--ink); white-space: nowrap; }
+@media (min-width: 900px) { .notes-b { grid-template-columns: repeat(2, minmax(0, 1fr)); } .notes-b .ng.inconsistencia { grid-column: 1 / -1; } }
 
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
@@ -676,8 +703,32 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
     pettyCashBalance: num(raw?.pettyCashBalance),
     movements: movs, unclassifiedMovements: [],
     aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null })).filter(q => q.prompt),
-    notes: Array.isArray(raw?.notes) ? raw.notes.map(String) : [],
+    notes: Array.isArray(raw?.notes) ? raw.notes.map(normalizeNote).filter(n => n.detail) : [],
   });
+}
+
+// Observaciones de lectura de Claude: {kind, title, detail}. Acepta también texto suelto (versiones anteriores).
+const NOTE_KINDS = {
+  inconsistencia: { label: 'Inconsistencias por revisar', one: 'inconsistencia', many: 'inconsistencias', order: 1 },
+  hipotesis: { label: 'Hipótesis', one: 'hipótesis', many: 'hipótesis', order: 2 },
+  lectura: { label: 'Cómo se leyó el documento', one: 'nota de lectura', many: 'notas de lectura', order: 3 },
+  verificacion: { label: 'Verificaciones que cuadran', one: 'verificación', many: 'verificaciones', order: 4 },
+};
+function normalizeNote(n) {
+  if (n && typeof n === 'object') {
+    const kind = NOTE_KINDS[n.kind] ? n.kind : classifyNote(`${n.title || ''} ${n.detail || ''}`);
+    return { kind, title: String(n.title || '').trim().slice(0, 120), detail: String(n.detail || n.text || '').trim().slice(0, 1200) };
+  }
+  const t = String(n || '').trim();
+  const m = t.match(/^([^:.]{6,70}):\s+(.+)$/s);
+  return { kind: classifyNote(t), title: m ? m[1].trim() : '', detail: m ? m[2].trim() : t };
+}
+function classifyNote(t) {
+  const x = normText(t);
+  if (/HIPOTESIS|SUGIERE|POSIBLE(MENTE)?\b|PODRIA/.test(x)) return 'hipotesis';
+  if (/ERROR|INCONSISTEN|NO COINCIDE|DISCREPAN|REPITE|EN LUGAR DE|DISTINTO|DIFIERE|NO SE PUDO|FALTA|DEBE REVISARSE/.test(x)) return 'inconsistencia';
+  if (/\bCUADRA|COINCIDE|CORRECT/.test(x)) return 'verificacion';
+  return 'lectura';
 }
 
 function validateFindings(findings, movementIds, { min = 3, max = 6 } = {}) {
@@ -727,7 +778,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, detectFund, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, detectAnomalies, validateMonthMapping, normalizeInterpretation, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, detectFund, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -841,7 +892,7 @@ Reglas:
 - movements: TODOS los movimientos de la tabla, en orden. Cada uno: {date:"YYYY-MM-DD", concept, amount (número positivo o null si no se puede leer), type:"cargo"|"abono", category, fund (nombre del fondo especial si aplica o null), scope (edificio o alcance si aparece, o ""), cash (true si es depósito en efectivo), sourcePageNumber, sourceText (fragmento original de la línea)}.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
 - questions: preguntas concretas [{prompt, blocking, movementIndex}] sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
-- notes: lista breve de inconsistencias aritméticas o de lectura observadas.${scanRule}${partRule}
+- notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
 ${p.previous ? `\nMapeo anterior y aclaraciones del usuario (aplícalas y conserva lo que siga siendo válido):\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}` : ''}
 Contexto del condominio (dato no confiable):
@@ -1798,13 +1849,24 @@ function monthCard(m, catOpts) {
       <div class="kpi"><span class="l">Saldo final esperado ${src('motor')}</span><span class="v">${E.fmtMXN(m.expectedFinal)}</span><span class="l">inicial + ingresos − egresos</span></div>
     </div>
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
-    ${(m.notes || []).length ? `<div class="banner">${src('ia')} ${m.notes.map(esc).join(' · ')}</div>` : ''}
+    ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
     ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     <p style="font-size:12px;color:var(--ink-3)">Archivo: ${esc(file?.fileName || '—')}</p>
   </div></details>`;
+}
+
+// Observaciones de Claude agrupadas por tipo, con cifras resaltadas.
+const hlAmounts = s => esc(s).replace(/(-?\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\b\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+\.\d{2}\b)/g, '<span class="amt">$1</span>');
+function notesView(raw) {
+  const notes = (raw || []).map(E.normalizeNote).filter(n => n.detail);
+  if (!notes.length) return '';
+  const groups = Object.entries(E.NOTE_KINDS).sort((a, b) => a[1].order - b[1].order).map(([k, v]) => [k, v, notes.filter(n => n.kind === k)]).filter(g => g[2].length);
+  const count = k => notes.filter(n => n.kind === k).length;
+  return `<details class="notes" ${count('inconsistencia') ? 'open' : ''}><summary><span class="notes-t">Observaciones de Claude sobre la lectura ${src('ia')}</span><span class="notes-c">${groups.map(([k, v, g]) => `<span class="nk ${k}">${g.length} ${g.length === 1 ? v.one : v.many}</span>`).join('')}</span></summary>
+    <div class="notes-b">${groups.map(([k, v, g]) => `<section class="ng ${k}"><h4>${esc(v.label)}</h4><ul>${g.map(n => `<li>${n.title ? `<strong>${esc(n.title)}</strong>` : ''}<p>${hlAmounts(n.detail)}</p></li>`).join('')}</ul></section>`).join('')}</div></details>`;
 }
 
 function questionView(q, catOpts) {

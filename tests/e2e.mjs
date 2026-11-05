@@ -39,7 +39,13 @@ const MOCK = () => {
         const abono = /CUOTA|APORTACION/.test(m[3]);
         movements.push({ date: `${period}-${m[1]}`, concept: m[3].trim(), amount: Number(m[4].replace(/,/g, '')), type: abono ? 'abono' : 'cargo', category: '', sourcePageNumber: 1, sourceText: line });
       }
-      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: [] };
+      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
+        'Aritmética bancaria cuadra: 648,404.56 + 212,901.83 − 187,641.84 = 673,664.55 (coincide con el saldo actual del estado de cuenta).',
+        'Los movimientos fueron tomados de los reportes de ingresos y egresos (páginas 4 a 8). La página 1 solo muestra el resumen.',
+        'El depósito en efectivo de $3,500.00 va a Caja Chica y no forma parte de los abonos bancarios; se incluyó con cash=true.',
+        'La Torre 4 - 303 pagó $2,430.00 y tiene $70.00 pendientes de aplicar el mismo día, lo que sugiere (hipótesis) un pago de $2,500.00 dividido.',
+        { kind: 'inconsistencia', title: 'Subtotal con etiqueta equivocada', detail: "En el reporte de egresos, el subtotal de 'Reembolsos de Caja Chica' ($5,000.00) está rotulado 'Total 6. Honorarios contables'." },
+        'La numeración de cuotas de mantenimiento repite el número 58 (dos renglones); en total hay 75 renglones listados.' ] : [] };
     } else if (op === 'analyze') {
       const c = JSON.parse(between(prompt, 'candidatos_motor'));
       out = { executiveSummary: 'Resumen simulado del diagnóstico para pruebas automatizadas del flujo.', trends: ['Tendencia simulada'], comparabilityNote: '', findings: c.slice(0, 5).map((a, i) => ({ id: `H${i + 1}`, title: a.title, description: a.detail, evidence: a.evidence, category: 'NO_CLASIFICADO', level: a.level, kind: a.kind, impact: 'Impacto simulado', recommendation: 'Recomendación simulada', missingData: '', hypotheses: [{ text: 'Hipótesis simulada cuantificada', quantified: true }], sourceRule: a.id })) };
@@ -88,6 +94,9 @@ ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría 
 for (const k of ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity']) await page.check(`#chk-${k}`);
 ok(await page.isDisabled('[data-act="confirm"]'), 'La casilla general no permite avanzar con pregunta bloqueante');
 await page.screenshot({ path: `${SHOTS}/2-confirmar.png`, fullPage: false });
+const notesEl = await page.$('details.notes');
+ok(!!notesEl && (await page.$$('details.notes .ng li')).length === 6, 'Observaciones de Claude separadas y agrupadas');
+await notesEl.scrollIntoViewIfNeeded(); await notesEl.screenshot({ path: `${SHOTS}/notas.png` });
 const qsel = await page.$('select[data-qcat]');
 await qsel.selectOption('EV_MANTENIMIENTO');
 await page.waitForTimeout(200);

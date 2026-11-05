@@ -659,13 +659,24 @@ function monthCard(m, catOpts) {
       <div class="kpi"><span class="l">Saldo final esperado ${src('motor')}</span><span class="v">${E.fmtMXN(m.expectedFinal)}</span><span class="l">inicial + ingresos − egresos</span></div>
     </div>
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
-    ${(m.notes || []).length ? `<div class="banner">${src('ia')} ${m.notes.map(esc).join(' · ')}</div>` : ''}
+    ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
     ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     <p style="font-size:12px;color:var(--ink-3)">Archivo: ${esc(file?.fileName || '—')}</p>
   </div></details>`;
+}
+
+// Observaciones de Claude agrupadas por tipo, con cifras resaltadas.
+const hlAmounts = s => esc(s).replace(/(-?\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\b\d{1,3}(?:,\d{3})+(?:\.\d{2})?\b|\b\d+\.\d{2}\b)/g, '<span class="amt">$1</span>');
+function notesView(raw) {
+  const notes = (raw || []).map(E.normalizeNote).filter(n => n.detail);
+  if (!notes.length) return '';
+  const groups = Object.entries(E.NOTE_KINDS).sort((a, b) => a[1].order - b[1].order).map(([k, v]) => [k, v, notes.filter(n => n.kind === k)]).filter(g => g[2].length);
+  const count = k => notes.filter(n => n.kind === k).length;
+  return `<details class="notes" ${count('inconsistencia') ? 'open' : ''}><summary><span class="notes-t">Observaciones de Claude sobre la lectura ${src('ia')}</span><span class="notes-c">${groups.map(([k, v, g]) => `<span class="nk ${k}">${g.length} ${g.length === 1 ? v.one : v.many}</span>`).join('')}</span></summary>
+    <div class="notes-b">${groups.map(([k, v, g]) => `<section class="ng ${k}"><h4>${esc(v.label)}</h4><ul>${g.map(n => `<li>${n.title ? `<strong>${esc(n.title)}</strong>` : ''}<p>${hlAmounts(n.detail)}</p></li>`).join('')}</ul></section>`).join('')}</div></details>`;
 }
 
 function questionView(q, catOpts) {

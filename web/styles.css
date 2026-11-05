@@ -91,6 +91,8 @@ p { margin: 0; }
 
 label.f { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); }
 label.f .hint { font-size: 12px; color: var(--ink-3); }
+label.f > .src, .mini > .src, .kpi .l > .src { align-self: flex-start; }
+label.f > .src, .mini > .src { margin-top: -2px; }
 input[type=text], input[type=number], input[type=password], select, textarea {
   background: #fffdf9; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; min-width: 0; }
 textarea { resize: vertical; min-height: 90px; }
@@ -205,3 +207,28 @@ details.log .inner { padding: 0 16px 16px; display: flex; flex-direction: column
 .muted { color: var(--ink-3); font-size: 13px; }
 .doc .note { border: 1px solid #d8ccb8; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
 .doc .muted { color: #7b7363; }
+
+/* Observaciones de Claude en la confirmación de datos */
+.notes { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.notes > summary { cursor: pointer; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; list-style: none; }
+.notes > summary::-webkit-details-marker { display: none; }
+.notes > summary::before { content: "▸"; color: var(--ink-3); margin-right: -6px; transition: transform .15s; }
+.notes[open] > summary::before { transform: rotate(90deg); }
+.notes-t { font-weight: 600; font-size: 14px; flex: 1; display: inline-flex; gap: 8px; align-items: center; }
+.notes-c { display: flex; flex-wrap: wrap; gap: 6px; }
+.nk { font-size: 12px; padding: 1px 9px; border-radius: 999px; font-weight: 600; border: 1px solid transparent; }
+.nk.inconsistencia { background: var(--mod-soft); color: var(--mod); }
+.nk.hipotesis { background: var(--obs-soft); color: var(--obs); }
+.nk.lectura { background: var(--surface-3); color: var(--ink-2); }
+.nk.verificacion { background: var(--ivy-soft); color: var(--ivy); }
+.notes-b { padding: 0 14px 14px; display: grid; gap: 14px; }
+.ng h4 { margin: 0 0 8px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+.ng ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ng li { border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: 9px 12px; display: grid; gap: 3px; max-width: 80ch; }
+.ng li strong { font-size: 14px; color: var(--ink); }
+.ng li p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.ng.inconsistencia li { border-left-color: var(--mod); }
+.ng.hipotesis li { border-left-color: var(--obs); }
+.ng.verificacion li { border-left-color: var(--ivy); }
+.amt { font-family: var(--f-mono); font-size: .95em; color: var(--ink); white-space: nowrap; }
+@media (min-width: 900px) { .notes-b { grid-template-columns: repeat(2, minmax(0, 1fr)); } .notes-b .ng.inconsistencia { grid-column: 1 / -1; } }
