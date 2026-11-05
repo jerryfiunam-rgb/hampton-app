@@ -290,3 +290,36 @@ tfoot td { background: var(--surface-2); border-top: 1px solid var(--line-strong
 .abandon { border: 1px dashed var(--line-strong); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 12px; background: var(--surface); }
 .abandon-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
 .abandon-row .stack { gap: 2px; }
+
+/* Diseño fijo: el encabezado y el menú de etapas no se mueven; solo se desplaza el área central. */
+html { height: 100%; box-sizing: border-box; }
+body { height: 100%; overflow: hidden; }
+#app { height: 100%; display: flex; flex-direction: column; }
+.topbar { flex: none; flex-direction: row; justify-content: center; gap: 14px; padding-block: 10px; text-align: center; }
+.topbar .logo { width: 60px; }
+.tb-text { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.tb-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: center; }
+.topbar .conn { padding: 3px 9px; font-size: 12px; }
+.shell { flex: 1 1 auto; min-height: 0; }
+.rail { overflow-y: auto; overscroll-behavior: contain; }
+main { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scroll-padding-top: 16px; }
+@media (max-width: 860px) {
+  .shell { grid-template-rows: auto minmax(0, 1fr); }
+  .rail { overflow-x: auto; overflow-y: hidden; }
+  .topbar { gap: 10px; padding-block: 8px; }
+  .topbar .logo { width: 42px; height: auto; }
+  .topbar .addr { display: none; }
+  .topbar h1.apptitle { font-size: 16px; }
+}
+
+/* Avance de la interpretación en paralelo */
+.status.err { white-space: pre-line; }
+.pfiles, .pcalls { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.pfiles li { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; gap: 10px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.pf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.pf-bar span { display: block; height: 100%; background: var(--brick); transition: width .3s; }
+.pf-st { font-family: var(--f-mono); font-size: 11.5px; white-space: nowrap; }
+.pf-st.ok { color: var(--ivy); }
+.pf-st.err { color: var(--crit); }
+.pcalls li { font-size: 11.5px; color: var(--ink-3); font-family: var(--f-mono); overflow-wrap: anywhere; }

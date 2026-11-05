@@ -298,6 +298,39 @@ tfoot td { background: var(--surface-2); border-top: 1px solid var(--line-strong
 .abandon-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
 .abandon-row .stack { gap: 2px; }
 
+/* Diseño fijo: el encabezado y el menú de etapas no se mueven; solo se desplaza el área central. */
+html { height: 100%; box-sizing: border-box; }
+body { height: 100%; overflow: hidden; }
+#app { height: 100%; display: flex; flex-direction: column; }
+.topbar { flex: none; flex-direction: row; justify-content: center; gap: 14px; padding-block: 10px; text-align: center; }
+.topbar .logo { width: 60px; }
+.tb-text { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.tb-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: center; }
+.topbar .conn { padding: 3px 9px; font-size: 12px; }
+.shell { flex: 1 1 auto; min-height: 0; }
+.rail { overflow-y: auto; overscroll-behavior: contain; }
+main { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scroll-padding-top: 16px; }
+@media (max-width: 860px) {
+  .shell { grid-template-rows: auto minmax(0, 1fr); }
+  .rail { overflow-x: auto; overflow-y: hidden; }
+  .topbar { gap: 10px; padding-block: 8px; }
+  .topbar .logo { width: 42px; height: auto; }
+  .topbar .addr { display: none; }
+  .topbar h1.apptitle { font-size: 16px; }
+}
+
+/* Avance de la interpretación en paralelo */
+.status.err { white-space: pre-line; }
+.pfiles, .pcalls { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.pfiles li { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; gap: 10px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.pf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.pf-bar span { display: block; height: 100%; background: var(--brick); transition: width .3s; }
+.pf-st { font-family: var(--f-mono); font-size: 11.5px; white-space: nowrap; }
+.pf-st.ok { color: var(--ivy); }
+.pf-st.err { color: var(--crit); }
+.pcalls li { font-size: 11.5px; color: var(--ink-3); font-family: var(--f-mono); overflow-wrap: anywhere; }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -1474,7 +1507,8 @@ function enabled(n) {
 function done(n) {
   return { 1: S.months.length > 0, 2: confirmed(), 3: !!S.diagnosis, 4: !!S.selectionConfirmedAt, 5: !!S.report, 6: !!S.review?.approvedAt, 7: !!S.alert?.acceptedAt, 8: !!S.closedAt }[n];
 }
-function go(n) { if (!enabled(n)) return; S.stage = n; save(); render(); window.scrollTo({ top: 0 }); }
+const scrollMainTop = () => { const m = document.querySelector('main'); if (m) m.scrollTop = 0; };
+function go(n) { if (!enabled(n)) return; S.stage = n; save(); render(); scrollMainTop(); }
 if (!enabled(S.stage)) S.stage = 1;
 
 // ---------- Conexión con Claude ----------
@@ -1501,7 +1535,18 @@ async function initAI() {
 }
 const aiReady = () => AI.mode === 'claude.ai' ? !!AI.sample : !!AI.server?.connected;
 
-let busy = null; // {key, startedAt, msg, ctl}
+// Operación en curso. Puede tener varias llamadas a Claude simultáneas (busy.calls) y,
+// al interpretar, el avance por archivo (busy.files).
+let busy = null; // {key, startedAt, msg, calls: Map, files?: []}
+let callSeq = 0;
+const INTERPRET_CONCURRENCY = 3; // llamadas simultáneas a Claude al interpretar
+async function runPool(tasks, n) {
+  let next = 0;
+  const worker = async () => { while (next < tasks.length) { const t = tasks[next++]; await t(); } };
+  await Promise.all(Array.from({ length: Math.min(n, tasks.length) }, worker));
+}
+function startBusy(key, extra = {}) { busy = { key, startedAt: Date.now(), msg: '', calls: new Map(), ...extra }; tick = setInterval(updateBusy, 8000); render(); }
+function endBusy() { clearInterval(tick); busy = null; }
 const errors = {}; // por acción
 let tick = null;
 
@@ -1533,10 +1578,14 @@ async function callAI(op, payload, key, { images = [], label = '' } = {}) {
   if (!aiReady()) { const e = new Error('not_connected'); e.code = 'not_connected'; throw e; }
   const { system, user } = buildPrompt(op, payload);
   const ctl = new AbortController();
-  busy = { key, startedAt: Date.now(), msg: label ? `${label}: iniciando…` : 'Iniciando…', label, ctl, chars: 0 };
-  render();
-  tick = setInterval(() => { if (busy) updateBusy(); }, 8000);
-  const timer = setTimeout(() => { ctl.abort(); busy && (busy.timedOut = true); }, TIMEOUT_MS[op] || 180000);
+  const owner = !busy;
+  if (owner) startBusy(key);
+  const callId = ++callSeq;
+  const prog = { label, msg: 'iniciando…', chars: 0, startedAt: Date.now() };
+  busy.calls.set(callId, prog);
+  updateBusy();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, TIMEOUT_MS[op] || 180000);
   const started = now();
   try {
     let text, usage = null, model = AI.model;
@@ -1545,17 +1594,17 @@ async function callAI(op, payload, key, { images = [], label = '' } = {}) {
         const res = await AI.sample(`${system}\n\n${user}`, {
           modelTier: op === 'interpret' ? 'default' : 'complex', cache: false, signal: ctl.signal,
           ...(images.length ? { images } : {}),
-          onText: ({ text }) => { if (busy) { busy.chars = text.length; busy.msg = `${busy.label ? busy.label + ': ' : ''}recibiendo respuesta…`; updateBusy(); } },
+          onText: ({ text }) => { prog.chars = text.length; prog.msg = 'recibiendo respuesta…'; updateBusy(); },
         });
         if (res.truncated) { const e = new Error('truncated'); e.code = 'truncated'; throw e; }
         text = res.text;
         model = res.modelApplied || model;
       } catch (e) {
-        if (e?.code === 'cancelled' && busy?.timedOut) { const t = new Error('timeout'); t.code = 'timeout'; throw t; }
+        if (e?.code === 'cancelled' && timedOut) { const t = new Error('timeout'); t.code = 'timeout'; throw t; }
         throw e;
       }
     } else {
-      ({ text, usage, model } = await serverAI(op, payload, ctl.signal, images));
+      ({ text, usage, model } = await serverAI(op, payload, ctl.signal, images, j => { prog.msg = j.message || prog.msg; prog.chars = j.chars ?? prog.chars; updateBusy(); }, () => timedOut));
     }
     const parsed = parseJsonText(text);
     const result = validateResult(op, parsed, payload);
@@ -1563,15 +1612,17 @@ async function callAI(op, payload, key, { images = [], label = '' } = {}) {
     save();
     return result;
   } catch (e) {
-    if (busy?.timedOut && e.code !== 'timeout') { e.code = 'timeout'; }
+    if (timedOut && e.code !== 'timeout') { e.code = 'timeout'; }
     throw e;
   } finally {
-    clearTimeout(timer); clearInterval(tick); busy = null;
+    clearTimeout(timer);
+    busy?.calls.delete(callId);
+    if (owner) endBusy(); else updateBusy();
   }
 }
 
 const blobToBase64 = b => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(b); });
-async function serverAI(op, payload, signal, images = []) {
+async function serverAI(op, payload, signal, images = [], onProgress = () => {}, isTimedOut = () => false) {
   const imgs = await Promise.all(images.map(blobToBase64));
   const r = await fetch('/api/ai', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op, payload, images: imgs }), signal });
   const ct = r.headers.get('content-type') || '';
@@ -1589,12 +1640,12 @@ async function serverAI(op, payload, signal, images = []) {
         const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const data = (chunk.match(/^data: (.*)$/m) || [])[1];
         if (!ev) continue;
         const j = data ? JSON.parse(data) : {};
-        if (ev === 'progress' && busy) { busy.msg = j.message || busy.msg; busy.chars = j.chars ?? busy.chars; updateBusy(); }
+        if (ev === 'progress') onProgress(j);
         if (ev === 'error') { const e = new Error(j.message); e.code = j.code; throw e; }
         if (ev === 'result') final = j;
       }
     }
-  } catch (e) { if (e.code) throw e; if (signal.aborted) { const t = new Error('timeout'); t.code = busy?.timedOut ? 'timeout' : 'cancelled'; throw t; } const x = new Error('interrupted'); x.code = 'interrupted'; throw x; }
+  } catch (e) { if (e.code) throw e; if (signal.aborted) { const t = new Error('timeout'); t.code = isTimedOut() ? 'timeout' : 'cancelled'; throw t; } const x = new Error('interrupted'); x.code = 'interrupted'; throw x; }
   if (!final) { const e = new Error('interrupted'); e.code = 'interrupted'; throw e; }
   return final;
 }
@@ -1602,8 +1653,15 @@ async function serverAI(op, payload, signal, images = []) {
 function updateBusy() {
   const el = document.getElementById('busy-' + busy?.key);
   if (!el || !busy) return;
-  const secs = Math.round((Date.now() - busy.startedAt) / 1000);
-  el.innerHTML = `<span><span class="spinner" aria-hidden="true"></span>${esc(busy.msg)} · ${secs} s${busy.chars ? ` · ${busy.chars.toLocaleString('es-MX')} caracteres recibidos` : ''}</span><span class="sub">Puedes usar otra pestaña; no cierres ni recargues esta.</span>`;
+  const secs = s => Math.round((Date.now() - s) / 1000);
+  const calls = [...busy.calls.values()];
+  const files = busy.files || [];
+  const head = files.length
+    ? `Interpretando ${files.length} PDF${files.length === 1 ? '' : 's'} · ${calls.length} lectura${calls.length === 1 ? '' : 's'} simultánea${calls.length === 1 ? '' : 's'} · ${secs(busy.startedAt)} s`
+    : `${busy.msg || calls[0]?.msg || 'Procesando…'} · ${secs(busy.startedAt)} s${calls[0]?.chars ? ` · ${calls[0].chars.toLocaleString('es-MX')} caracteres recibidos` : ''}`;
+  const fileRows = files.map(f => `<li><span class="pf-name">${esc(f.name)}</span><span class="pf-bar"><span style="width:${f.total ? Math.round((f.done / f.total) * 100) : 0}%"></span></span><span class="pf-st ${f.state === 'error' ? 'err' : f.state === 'listo' ? 'ok' : ''}">${f.state === 'listo' ? 'Listo' : f.state === 'error' ? 'Con error' : f.state === 'en cola' ? 'En espera' : `${f.done} de ${f.total} lote${f.total === 1 ? '' : 's'}`}</span></li>`).join('');
+  const callRows = files.length ? calls.map(c => `<li class="pc">${esc(c.label)} · ${esc(c.msg)} · ${secs(c.startedAt)} s${c.chars ? ` · ${c.chars.toLocaleString('es-MX')} car.` : ''}</li>`).join('') : '';
+  el.innerHTML = `<span><span class="spinner" aria-hidden="true"></span>${head}</span>${fileRows ? `<ul class="pfiles">${fileRows}</ul>` : ''}${callRows ? `<ul class="pcalls">${callRows}</ul>` : ''}<span class="sub">Puedes usar otra pestaña; no cierres ni recargues esta.</span>`;
 }
 
 // ---------- Lectura de PDF ----------
@@ -1727,6 +1785,12 @@ async function interpretPages(f, pages, ctx, depth = 0) {
     const part = await callAI('interpret', { file: { ...f, pages: chunk.pages }, part: split ? { range: pageRange(pages), totalPages: f.pages.length } : null, condo: condoForAI(), previous: split ? previousForPages(ctx.prev, pages) : (ctx.prev ? slimMonth(ctx.prev) : null), answers: ctx.answers }, 'interpret', { images: chunk.images, label });
     return [part];
   } catch (e) {
+    if (e?.code === 'rate_limited' && !ctx.waited) {
+      ctx.waited = true;
+      log('espera', `${f.fileName}: claude.ai pidió esperar; se reintenta en 10 s`);
+      await new Promise(r => setTimeout(r, 10000));
+      return interpretPages(f, pages, ctx, depth);
+    }
     if (e?.code === 'truncated' && pages.length > 1 && depth < 6) {
       ctx.splits++;
       log('lote_dividido', `${f.fileName}: respuesta truncada en páginas ${pageRange(pages)}; se divide en dos lotes`);
@@ -1758,23 +1822,38 @@ function mergeParts(parts, f) {
   return E.recomputeMonth({ ...parts[0], period, initialBalance: summary ? summary.initialBalance : (first('initialBalance') ?? null), finalBalance: summary ? summary.finalBalance : (first('finalBalance') ?? null), reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period) });
 }
 
+// Interpreta los PDFs con hasta INTERPRET_CONCURRENCY lecturas simultáneas (lotes de páginas de
+// uno o varios PDFs). Cada PDF se integra al terminar todos sus lotes; un PDF con error no detiene a los demás.
 async function runInterpret(onlyIds = null) {
   const targets = S.files.filter(f => f.status !== 'error' && f.pages?.length && (onlyIds ? onlyIds.includes(f.id) : !S.months.some(m => m.fileId === f.id)));
   if (!targets.length) { errors.interpret = 'No hay PDFs nuevos por interpretar.'; render(); return; }
+  if (!aiReady()) { errors.interpret = errorText('not_connected'); render(); return false; }
   errors.interpret = null;
+  const failures = [];
+  const fail = (f, e, prog) => {
+    failures.push(`${f.fileName}: ${['reload_pdf', 'images_unavailable', 'duplicate_period', 'truncated_page'].includes(e.code) ? e.message : errorText(e.code, e.message)}`);
+    log('error_ia', `interpret ${f.fileName}: ${e.code || ''} ${e.message}`);
+    if (prog) prog.state = 'error';
+  };
+  startBusy('interpret', { files: [] });
+  const jobs = [];
   for (const f of targets) {
+    const prev = S.months.find(m => m.fileId === f.id);
+    const hasScans = f.pages.some(p => p.scanned);
+    if (hasScans && !PAGE_IMAGES.has(f.id) && !prev) { fail(f, Object.assign(new Error('Las páginas escaneadas no se conservan al recargar. Quita el archivo y vuelve a cargar el PDF.'), { code: 'reload_pdf' })); continue; }
+    if (hasScans && PAGE_IMAGES.has(f.id) && AI.mode === 'claude.ai' && !AI.maxImages) { fail(f, Object.assign(new Error('Esta vista no permite enviar imágenes a Claude para leer las páginas escaneadas.'), { code: 'images_unavailable' })); continue; }
+    const answers = prev ? (prev.aiQuestions || []).filter(q => S.answers[q.id]).map(q => ({ question: q.prompt, answer: S.answers[q.id] })) : [];
+    const groups = interpretChunks(f);
+    const ctx = { prev, answers, splits: 0, forceSplit: groups.length > 1 };
+    const prog = { name: f.fileName, done: 0, total: groups.length, state: 'en cola' };
+    busy.files.push(prog);
+    jobs.push({ f, prev, ctx, groups, prog, parts: new Array(groups.length), remaining: groups.length, error: null });
+  }
+  const finish = job => {
+    const { f, prev, parts, prog } = job;
     try {
-      const prev = S.months.find(m => m.fileId === f.id);
-      const hasScans = f.pages.some(p => p.scanned);
-      if (hasScans && !PAGE_IMAGES.has(f.id) && !prev) throw Object.assign(new Error('Las páginas escaneadas no se conservan al recargar. Quita el archivo y vuelve a cargar el PDF.'), { code: 'reload_pdf' });
-      if (hasScans && PAGE_IMAGES.has(f.id) && AI.mode === 'claude.ai' && !AI.maxImages) throw Object.assign(new Error('Esta vista no permite enviar imágenes a Claude para leer las páginas escaneadas.'), { code: 'images_unavailable' });
-      const answers = prev ? (prev.aiQuestions || []).filter(q => S.answers[q.id]).map(q => ({ question: q.prompt, answer: S.answers[q.id] })) : [];
-      const ctx = { prev, answers, splits: 0, forceSplit: false };
-      const groups = interpretChunks(f);
-      if (groups.length > 1) ctx.forceSplit = true;
-      const parts = [];
-      for (const g of groups) parts.push(...await interpretPages(f, g, ctx));
-      const month = parts.length === 1 ? parts[0] : mergeParts(parts, f);
+      const flat = parts.flat();
+      const month = flat.length === 1 ? flat[0] : mergeParts(flat, f);
       const scannedPages = new Set(f.pages.filter(p => p.scanned).map(p => p.number));
       for (const m of [...month.movements, ...month.unclassifiedMovements]) m.fromScan = scannedPages.has(m.sourcePageNumber);
       const errs = E.validateMonthMapping(month);
@@ -1787,15 +1866,24 @@ async function runInterpret(onlyIds = null) {
       if (!S.meta.bank && month.bank) S.meta.bank = month.bank;
       if (!S.meta.accountType && month.accountType) S.meta.accountType = month.accountType;
       invalidate('mapping');
-      log(prev ? 'reinterpretación' : 'interpretación', `${f.fileName} → ${month.period}: ${month.movements.length + month.unclassifiedMovements.length} movimientos${scannedPages.size ? ` (${scannedPages.size} páginas escaneadas leídas como imagen)` : ''}`);
-    } catch (e) {
-      errors.interpret = `${f.fileName}: ${['reload_pdf', 'images_unavailable', 'duplicate_period', 'truncated_page'].includes(e.code) ? e.message : errorText(e.code, e.message)}`;
-      log('error_ia', `interpret ${f.fileName}: ${e.code || ''} ${e.message}`);
-      save(); render(); return false;
-    }
+      prog.state = 'listo';
+      log(prev ? 'reinterpretación' : 'interpretación', `${f.fileName} → ${month.period}: ${month.movements.length + month.unclassifiedMovements.length} movimientos en ${job.groups.length} lote${job.groups.length === 1 ? '' : 's'}${scannedPages.size ? ` (${scannedPages.size} páginas escaneadas leídas como imagen)` : ''}`);
+    } catch (e) { fail(f, e, prog); }
     save(); render();
-  }
-  return true;
+  };
+  const tasks = jobs.flatMap(job => job.groups.map((g, gi) => async () => {
+    if (job.error) return;
+    if (job.prog.state === 'en cola') job.prog.state = 'leyendo';
+    try { job.parts[gi] = await interpretPages(job.f, g, job.ctx); }
+    catch (e) { if (!job.error) { job.error = e; fail(job.f, e, job.prog); save(); render(); } return; }
+    job.prog.done++; updateBusy();
+    if (--job.remaining === 0) finish(job);
+  }));
+  try { await runPool(tasks, INTERPRET_CONCURRENCY); }
+  finally { endBusy(); }
+  errors.interpret = failures.length ? failures.join('\n') : null;
+  save(); render();
+  return failures.length === 0;
 }
 const slimMonth = m => ({ period: m.period, initialBalance: m.initialBalance, finalBalance: m.finalBalance, movements: [...m.movements, ...m.unclassifiedMovements].map(x => ({ date: x.date, concept: x.concept, amount: x.amount, type: x.type, category: x.category, sourcePageNumber: x.sourcePageNumber, fund: x.fund })) });
 
@@ -1859,13 +1947,13 @@ async function testConnection() {
   errors.connect = null;
   if (AI.mode === 'claude.ai') {
     if (!AI.sample) { errors.connect = AI.error; render(); return; }
-    busy = { key: 'connect', startedAt: Date.now(), msg: 'Solicitando permiso a claude.ai…' }; render();
+    startBusy('connect', { msg: 'Solicitando permiso a claude.ai…' });
     try {
       const r = await AI.sample('Responde únicamente con la palabra OK.', { modelTier: 'quick', cache: false });
       AI.verified = /ok/i.test(r.text);
       log('conexión', 'Claude verificado mediante la cuenta de claude.ai');
     } catch (e) { errors.connect = errorText(e.code, e.message); }
-    busy = null; render();
+    endBusy(); render();
   } else openConnectDialog();
 }
 
@@ -1953,20 +2041,24 @@ function render() {
   const root = app();
   if (!root) return;
   const focusId = document.activeElement?.id;
+  const scrollTop = document.querySelector('main')?.scrollTop || 0;
   root.innerHTML = `
   <header class="topbar">
-    <img class="logo" src="${LOGO}" alt="Escudo del Condominio Hampton Court" width="84" height="85">
-    <h1 class="apptitle">Análisis de estados de cuenta - <span>Condominio Hampton Court</span></h1>
-    <span class="addr">${esc(CONDO.address)} · ${CONDO.units} departamentos</span>
-    <span class="conn">${connBadge()}</span>
+    <img class="logo" src="${LOGO}" alt="Escudo del Condominio Hampton Court" width="60" height="61">
+    <div class="tb-text">
+      <h1 class="apptitle">Análisis de estados de cuenta - <span>Condominio Hampton Court</span></h1>
+      <div class="tb-sub"><span class="addr">${esc(CONDO.address)} · ${CONDO.units} departamentos</span><span class="conn">${connBadge()}</span></div>
+    </div>
   </header>
   <div class="shell">
     <nav class="rail" aria-label="Etapas del análisis"><ol>${STAGES.map(st => `<li><button class="step ${done(st.n) ? 'done' : ''}" data-go="${st.n}" ${enabled(st.n) ? '' : 'disabled'} ${S.stage === st.n ? 'aria-current="step"' : ''}><span class="n">${done(st.n) ? '✓' : st.n}</span><span class="t">${st.t}<span class="s">${done(st.n) ? 'Completada' : enabled(st.n) ? st.s : 'Bloqueada'}</span></span></button></li>`).join('')}</ol>
     <p class="note">El análisis se guarda solo en este navegador. Sin sincronización entre equipos: usa la copia JSON para cambiar de equipo.</p></nav>
     <main><div class="wrap">${banners()}${stageView()}${abandonView()}${logView()}</div></main>
   </div>`;
+  const mainEl = document.querySelector('main');
+  if (mainEl) mainEl.scrollTop = scrollTop;
   if (busy) updateBusy();
-  if (focusId && document.getElementById(focusId)) document.getElementById(focusId).focus();
+  if (focusId && document.getElementById(focusId)) document.getElementById(focusId).focus({ preventScroll: true });
   wireAfterRender();
 }
 
@@ -2246,8 +2338,9 @@ function stage5() {
   ${r ? `<section class="panel"><div class="row"><h2>Vista previa</h2><span class="pill moderate">Borrador para revisión</span></div>${previewFrame()}</section>` : ''}`;
 }
 
+let previewHeight = 900;
 function previewFrame() {
-  return `<iframe class="doc" id="preview" title="Vista previa del reporte" style="width:100%;border:0;min-height:600px;padding:0" sandbox="allow-same-origin"></iframe>`;
+  return `<iframe class="doc" id="preview" title="Vista previa del reporte" style="width:100%;border:0;height:${previewHeight}px;padding:0" sandbox="allow-same-origin"></iframe>`;
 }
 
 // ----- Etapa 6 -----
@@ -2269,9 +2362,21 @@ function stage6() {
       ${rv?.approvedAt ? (S.alert ? '<button class="btn primary" data-go="7">Ver nota de alerta</button>' : `<button class="btn primary" data-act="alert" ${dis()}>Generar nota de alerta</button>`) : `<button class="btn primary" data-act="approve" ${dis(!ok)}>Aprobar reporte</button>`}
       <button class="btn ghost" data-go="5" ${dis()}>Volver al reporte para pedir ajustes</button>
       ${statusFor('alert')}
-      ${!rv?.approvedAt && !ok ? `<span class="status">${!d.reviewer.trim() ? 'Falta el nombre del revisor.' : 'Faltan confirmaciones.'}</span>` : ''}
+      ${!rv?.approvedAt ? `<span class="status" id="rv-hint">${reviewHint()}</span>` : ''}
     </div>
   </section>`;
+}
+
+function reviewHint() {
+  const d = S._review || {};
+  return !(d.reviewer || '').trim() ? 'Falta el nombre del revisor.' : !(d.a && d.b && d.c) ? `Faltan ${[d.a, d.b, d.c].filter(x => !x).length} confirmación(es).` : 'Listo para aprobar.';
+}
+// Actualiza el botón y el aviso sin redibujar la pantalla (evita que la página salte).
+function refreshReviewControls() {
+  const d = S._review;
+  const ok = (d.reviewer || '').trim() && d.a && d.b && d.c;
+  const b = document.querySelector('[data-act="approve"]'); if (b) b.disabled = !ok || !!busy;
+  const h = document.getElementById('rv-hint'); if (h) h.textContent = reviewHint();
 }
 
 // ----- Etapa 7 -----
@@ -2333,7 +2438,7 @@ function wireAfterRender() {
   const fr = document.getElementById('preview');
   if (fr && S.report) {
     fr.srcdoc = standaloneReport(S, indicators(), { preview: true, logo: LOGO });
-    fr.onload = () => { try { fr.style.height = (fr.contentDocument.documentElement.scrollHeight + 20) + 'px'; } catch {} };
+    fr.onload = () => { try { previewHeight = fr.contentDocument.documentElement.scrollHeight + 20; fr.style.height = previewHeight + 'px'; } catch {} };
   }
   const drop = document.getElementById('drop');
   if (drop) {
@@ -2420,7 +2525,7 @@ document.addEventListener('click', async e => {
     case 'close': S.closedAt = now(); log('cierre', 'Análisis cerrado por el usuario'); save(); return render();
     case 'new': S._confirmNew = true; render(); document.getElementById('abandon')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return;
     case 'new-no': S._confirmNew = false; return render();
-    case 'new-yes': { try { localStorage.removeItem(STORE_KEY); } catch {} PAGE_IMAGES.clear(); for (const k in errors) errors[k] = null; S = fresh(); log('nuevo_análisis', 'Se descartó el análisis anterior'); save(); render(); window.scrollTo({ top: 0 }); return; }
+    case 'new-yes': { try { localStorage.removeItem(STORE_KEY); } catch {} PAGE_IMAGES.clear(); for (const k in errors) errors[k] = null; S = fresh(); log('nuevo_análisis', 'Se descartó el análisis anterior'); save(); render(); scrollMainTop(); return; }
   }
 });
 
@@ -2432,7 +2537,7 @@ document.addEventListener('input', e => {
     save();
   }
   if (t.dataset.qtext) { S.answers[t.dataset.qtext] = t.value; save(); }
-  if (t.dataset.rvname) { S._review.reviewer = t.value; save(); const b = document.querySelector('[data-act="approve"]'); if (b) b.disabled = !(t.value.trim() && S._review.a && S._review.b && S._review.c); }
+  if (t.dataset.rvname) { S._review.reviewer = t.value; save(); refreshReviewControls(); }
 });
 
 document.addEventListener('change', e => {
@@ -2454,7 +2559,7 @@ document.addEventListener('change', e => {
   if (t.dataset.fund !== undefined) { S.fundOpenings[t.dataset.fund] = t.value === '' ? undefined : Number(t.value); if (confirmed()) invalidate('confirmation'); S.confirmation = null; log('fondo', `${t.dataset.fund}: saldo previo ${t.value || 'vacío'}`); save(); return render(); }
   if (t.dataset.level) { const s = S.selection.find(x => x.id === t.dataset.level); s.level = t.value; if (S.selectionConfirmedAt || S.report) invalidate('selection'); log('nivel', `${s.id} → ${t.value}`); save(); return render(); }
   if (t.dataset.hyp) { const [id, k] = t.dataset.hyp.split('|'); const s = S.selection.find(x => x.id === id); const n = Number(k); s.acceptedHypotheses = t.checked ? [...new Set([...(s.acceptedHypotheses || []), n])] : (s.acceptedHypotheses || []).filter(x => x !== n); if (S.report) invalidate('report'); log('hipótesis', `${id}#${k} ${t.checked ? 'aceptada' : 'retirada'}`); save(); return render(); }
-  if (t.dataset.rv) { S._review[t.dataset.rv] = t.checked; save(); return render(); }
+  if (t.dataset.rv) { S._review[t.dataset.rv] = t.checked; save(); return refreshReviewControls(); }
   if (t.dataset.rvrole) { S._review.role = t.value; save(); }
 });
 

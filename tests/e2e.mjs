@@ -17,7 +17,12 @@ const MOCK = () => {
   const MES = { ENE: '01', FEB: '02', MAR: '03' };
   window.__calls = []; window.__saved = [];
   async function sample(prompt, opts = {}) {
-    await new Promise(r => setTimeout(r, 150));
+    window.__active = (window.__active || 0) + 1;
+    window.__maxActive = Math.max(window.__maxActive || 0, window.__active);
+    try { return await sampleInner(prompt, opts); } finally { window.__active--; }
+  }
+  async function sampleInner(prompt, opts = {}) {
+    await new Promise(r => setTimeout(r, /OPERACIÓN: interpret/.test(prompt) ? 600 : 150));
     const op = (prompt.match(/OPERACIÓN: (\w+)/) || [])[1];
     window.__calls.push(op + (opts.images ? `+${opts.images.length}img` : ''));
     let out;
@@ -88,9 +93,17 @@ await page.check('#consent');
 await page.screenshot({ path: `${SHOTS}/1-carga.png` });
 await page.screenshot({ path: `${SHOTS}/1-carga-full.png`, fullPage: true });
 await page.click('[data-act="interpret"]');
+await page.waitForSelector('.pfiles li'); await page.waitForTimeout(250); await (await page.$('#busy-interpret')).screenshot({ path: `${SHOTS}/progreso.png` });
 await page.waitForSelector('text=Confirmar datos >> nth=0');
 await page.waitForFunction(() => document.querySelector('.stage-head .k')?.textContent.includes('Etapa 2'));
 ok(true, 'Interpretación de 3 meses y paso a confirmar datos');
+const maxActive = await page.evaluate(() => window.__maxActive);
+ok(maxActive >= 2 && maxActive <= 3, `Lecturas en paralelo, máximo 3 a la vez (máximo observado: ${maxActive})`);
+const layout = await page.evaluate(() => ({ docScroll: document.scrollingElement.scrollHeight - innerHeight, mainOverflow: getComputedStyle(document.querySelector('main')).overflowY, mainScrolls: document.querySelector('main').scrollHeight > document.querySelector('main').clientHeight }));
+ok(layout.docScroll <= 1 && layout.mainOverflow === 'auto' && layout.mainScrolls, 'Encabezado y menú fijos: solo se desplaza el área central');
+await page.evaluate(() => { document.querySelector('main').scrollTop = 400; });
+const hdrTop = await page.evaluate(() => document.querySelector('header').getBoundingClientRect().top);
+ok(hdrTop >= 0 && hdrTop < 2, 'El encabezado sigue visible al desplazar');
 ok((await page.evaluate(() => window.__calls)).includes('interpret+1img') && (await page.evaluate(() => window.__imageBytes)) > 20000, 'La página escaneada se envía a Claude como imagen JPEG');
 ok((await page.evaluate(() => window.__truncations)) === 1 && (await page.textContent('details.log')).includes('se divide en dos lotes'), 'Respuesta truncada: el PDF se divide en lotes de páginas automáticamente');
 ok((await page.textContent('main')).includes('$561,400.00'), 'Los lotes se unen con los saldos del resumen');
@@ -150,7 +163,11 @@ await page.click('[data-go="5"]:not(.step)');
 await page.click('[data-act="report"]');
 await page.waitForSelector('#preview');
 await page.click('[data-go="6"]:not(.step)');
+await page.evaluate(() => { const m = document.querySelector('main'); m.scrollTop = m.scrollHeight; });
+const before = await page.evaluate(() => document.querySelector('main').scrollTop);
 await page.check('#rv-a'); await page.check('#rv-b');
+const after = await page.evaluate(() => document.querySelector('main').scrollTop);
+ok(before > 300 && Math.abs(after - before) < 5, `Marcar los criterios de revisión no mueve la pantalla (${before} → ${after})`);
 ok(await page.isDisabled('[data-act="approve"]'), 'Sin nombre ni tres confirmaciones no se aprueba');
 await page.check('#rv-c'); await page.fill('#rv-name', 'Revisor de prueba');
 await page.click('[data-act="approve"]');
