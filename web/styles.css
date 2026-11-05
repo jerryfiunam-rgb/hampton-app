@@ -279,3 +279,14 @@ p, li, .lead, .banner, .check > span, .ng li p, .fbody, .plane li > span:last-ch
 .frow.rec .fbody { color: var(--ink); font-weight: 500; }
 .evt table { font-size: 12.5px; }
 @media (max-width: 640px) { .frow { grid-template-columns: minmax(0, 1fr); } }
+
+/* Reporte de morosidad en la confirmación de datos */
+.mor { display: grid; gap: 10px; border-top: 1px dashed var(--line-strong); padding-top: 12px; }
+.mor-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mor-h h4 { margin: 0; font-size: 14.5px; font-family: var(--f-head); display: inline-flex; gap: 8px; align-items: center; }
+tfoot td { background: var(--surface-2); border-top: 1px solid var(--line-strong); }
+
+/* Interrumpir el análisis */
+.abandon { border: 1px dashed var(--line-strong); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 12px; background: var(--surface); }
+.abandon-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.abandon-row .stack { gap: 2px; }

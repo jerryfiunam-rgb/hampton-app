@@ -56,7 +56,7 @@ function load() {
     if (!raw) return null;
     const s = JSON.parse(raw);
     if (s?.schema !== SCHEMA) return null;
-    return { ...fresh(), ...s, condo: { ...CONDO } };
+    return { ...fresh(), ...s, condo: { ...CONDO }, _confirmNew: false };
   } catch { storageOk = false; return null; }
 }
 function save() {
@@ -331,6 +331,13 @@ function interpretChunks(f) {
   return chunks;
 }
 
+function mergeDelinquency(parts, period) {
+  const ds = parts.map(p => p.delinquency).filter(d => d?.found);
+  if (!ds.length) return { found: false, asOf: null, reportedTotal: null, rows: [] };
+  let n = 0;
+  return { found: true, asOf: ds.map(d => d.asOf).find(Boolean) || null, reportedTotal: ds.map(d => d.reportedTotal).find(v => v !== null && v !== undefined) ?? null, rows: ds.flatMap(d => d.rows).map(r => ({ ...r, id: `${period}-D${String(++n).padStart(3, '0')}` })) };
+}
+
 // Une las partes de un mismo estado de cuenta leído en varios lotes.
 function mergeParts(parts, f) {
   const first = v => parts.map(p => p[v]).find(x => x !== null && x !== undefined && x !== '');
@@ -340,7 +347,7 @@ function mergeParts(parts, f) {
   const movements = parts.flatMap(p => [...p.movements, ...p.unclassifiedMovements]).map(m => ({ ...m, id: `${period}-${String(++n).padStart(3, '0')}` }));
   let q = 0;
   const aiQuestions = parts.flatMap(p => p.aiQuestions || []).map(x => ({ ...x, id: `q-ai-${period}-${++q}`, period }));
-  return E.recomputeMonth({ ...parts[0], period, initialBalance: parts[0].initialBalance ?? first('initialBalance'), finalBalance: lastFinal ?? null, reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []) });
+  return E.recomputeMonth({ ...parts[0], period, initialBalance: parts[0].initialBalance ?? first('initialBalance'), finalBalance: lastFinal ?? null, reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period) });
 }
 
 async function runInterpret(onlyIds = null) {
@@ -392,7 +399,8 @@ async function runAnalyze() {
   const anomalies = E.detectAnomalies(ms, ind);
   const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
   try {
-    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs }, 'analyze');
+    const delinquency = E.delinquencyRows(ms).map(r => ({ id: r.id, period: r.period, unit: r.unit, amount: r.amount, months: r.months }));
+    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency }, 'analyze');
     S.diagnosis = { at: now(), hash: mappingHash(), indicators: ind, anomalies, ai };
     invalidate('selection'); S.selection = [];
     log('diagnóstico', `${ai.findings.length} hallazgos propuestos; ${anomalies.length} reglas disparadas`);
@@ -401,9 +409,16 @@ async function runAnalyze() {
 }
 const condoForAI = () => ({ name: CONDO.name, address: CONDO.address, context: CONDO.context, units: CONDO.units, bank: S.meta.bank, accountType: S.meta.accountType, currency: S.meta.currency });
 
+// Evidencia citable: movimientos bancarios y filas del reporte de morosidad.
+function evidenceIndex() {
+  const mv = new Map(allMovements().map(m => [m.id, m]));
+  for (const r of E.delinquencyRows(months())) mv.set(r.id, { id: r.id, date: r.asOf || r.period, concept: `Adeudo ${r.unit}${r.months ? ` (${r.months} meses)` : ''}`, amount: r.amount, type: 'morosidad' });
+  return mv;
+}
+
 function selectedFindings() {
   const props = S.diagnosis?.ai?.findings || [];
-  const mv = new Map(allMovements().map(m => [m.id, m]));
+  const mv = evidenceIndex();
   return S.selection.map(s => {
     const p = props.find(f => f.id === s.id);
     return { ...p, level: s.level, acceptedHypotheses: (p.hypotheses || []).filter((_, k) => (s.acceptedHypotheses || []).includes(k)), evidenceMovements: (p.evidence || []).map(id => mv.get(id)).filter(Boolean).map(m => ({ id: m.id, date: m.date, concept: m.concept, amount: m.amount, type: m.type })) };
@@ -541,7 +556,7 @@ function render() {
   <div class="shell">
     <nav class="rail" aria-label="Etapas del análisis"><ol>${STAGES.map(st => `<li><button class="step ${done(st.n) ? 'done' : ''}" data-go="${st.n}" ${enabled(st.n) ? '' : 'disabled'} ${S.stage === st.n ? 'aria-current="step"' : ''}><span class="n">${done(st.n) ? '✓' : st.n}</span><span class="t">${st.t}<span class="s">${done(st.n) ? 'Completada' : enabled(st.n) ? st.s : 'Bloqueada'}</span></span></button></li>`).join('')}</ol>
     <p class="note">El análisis se guarda solo en este navegador. Sin sincronización entre equipos: usa la copia JSON para cambiar de equipo.</p></nav>
-    <main><div class="wrap">${banners()}${stageView()}${logView()}</div></main>
+    <main><div class="wrap">${banners()}${stageView()}${abandonView()}${logView()}</div></main>
   </div>`;
   if (busy) updateBusy();
   if (focusId && document.getElementById(focusId)) document.getElementById(focusId).focus();
@@ -606,7 +621,8 @@ function stage2() {
   const block = blockingOpen();
   const conf = S.confirmation;
   const checks = S._checks || (S._checks = {});
-  const allChecked = ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity'].every(k => checks[k]);
+  const allChecked = ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency'].every(k => checks[k]);
+  const morMonths = ms.filter(m => m.delinquency?.found).length;
   const catOpts = sel => E.CATEGORIES.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.label)}</option>`).join('');
   return `${head(2, 'Confirmar datos', 'Revisa por mes los saldos y movimientos extraídos, corrige categorías y responde las aclaraciones. Ningún análisis se ejecuta sobre datos sin confirmar.')}
   ${legend()}
@@ -631,7 +647,7 @@ function stage2() {
       <button class="btn sm" data-act="check-all" ${dis(allChecked)}>Seleccionar todo</button>
       <button class="btn sm ghost" data-act="check-none" ${dis(!Object.values(checks).some(Boolean))}>Deseleccionar todo</button></div></div>
     <div class="stack">
-      ${[['currency', 'La moneda es MXN.'], ['bank', `El banco (${esc(S.meta.bank || 'sin indicar')}) y el tipo de cuenta son correctos.`], ['period', `El período cubierto (${esc(ms[0]?.period)} → ${esc(ms.at(-1)?.period)}) es correcto.`], ['categories', 'Revisé las categorías asignadas a los movimientos.'], ['funds', 'Los fondos especiales identificados son correctos.'], ['arithmetic', `Revisé el cuadre aritmético de cada mes (${ms.filter(m => !m.balanceCheck).length} con diferencia).`], ['continuity', `Revisé la continuidad de saldos entre meses (${cont.filter(c => !c.ok && c.consecutive).length} discontinuidades).`]].map(([k, t]) => `<label class="check"><input type="checkbox" id="chk-${k}" data-check="${k}" ${checks[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
+      ${[['currency', 'La moneda es MXN.'], ['bank', `El banco (${esc(S.meta.bank || 'sin indicar')}) y el tipo de cuenta son correctos.`], ['period', `El período cubierto (${esc(ms[0]?.period)} → ${esc(ms.at(-1)?.period)}) es correcto.`], ['categories', 'Revisé las categorías asignadas a los movimientos.'], ['funds', 'Los fondos especiales identificados son correctos.'], ['arithmetic', `Revisé el cuadre aritmético de cada mes (${ms.filter(m => !m.balanceCheck).length} con diferencia).`], ['continuity', `Revisé la continuidad de saldos entre meses (${cont.filter(c => !c.ok && c.consecutive).length} discontinuidades).`], ['delinquency', `Revisé el reporte de morosidad por departamento (${morMonths} de ${ms.length} meses con reporte).`]].map(([k, t]) => `<label class="check"><input type="checkbox" id="chk-${k}" data-check="${k}" ${checks[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
     </div>
     ${block.length ? `<div class="banner err" role="alert">Hay ${block.length} pregunta${block.length === 1 ? '' : 's'} bloqueante${block.length === 1 ? '' : 's'} sin resolver. La casilla general no la${block.length === 1 ? '' : 's'} resuelve. <a href="#q-${esc(block[0].id)}" data-scroll="q-${esc(block[0].id)}">Ir a la primera</a></div>` : ''}
     <div class="actionbar">
@@ -666,6 +682,7 @@ function monthCard(m, catOpts) {
     ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
+    ${delinquencyMonth(m)}
     <p style="font-size:12px;color:var(--ink-3)">Archivo: ${esc(file?.fileName || '—')}</p>
   </div></details>`;
 }
@@ -679,6 +696,20 @@ function notesView(raw) {
   const count = k => notes.filter(n => n.kind === k).length;
   return `<details class="notes" ${count('inconsistencia') ? 'open' : ''}><summary><span class="notes-t">Observaciones de Claude sobre la lectura ${src('ia')}</span><span class="notes-c">${groups.map(([k, v, g]) => `<span class="nk ${k}">${g.length} ${g.length === 1 ? v.one : v.many}</span>`).join('')}</span></summary>
     <div class="notes-b">${groups.map(([k, v, g]) => `<section class="ng ${k}"><h4>${esc(v.label)}</h4><ul>${g.map(n => `<li>${n.title ? `<strong>${esc(n.title)}</strong>` : ''}<p>${hlAmounts(n.detail)}</p></li>`).join('')}</ul></section>`).join('')}</div></details>`;
+}
+
+function delinquencyMonth(m) {
+  const d = m.delinquency;
+  const reread = `<button class="btn sm" data-act="reread" data-file="${esc(m.fileId)}" ${dis()}>Volver a leer este mes con Claude</button>`;
+  if (!d) return `<div class="mor"><div class="mor-h"><h4>Reporte de morosidad por departamento</h4></div><div class="banner warn"><span>Este mes se interpretó antes de que la aplicación leyera el reporte de morosidad. Vuelve a leerlo para incorporarlo; después deberás confirmar los datos otra vez.</span></div><div class="row">${reread}</div>${statusFor('interpret')}</div>`;
+  if (!d.found) return `<div class="mor"><div class="mor-h"><h4>Reporte de morosidad por departamento</h4></div><p class="muted">Claude no encontró un reporte de morosidad en este PDF. Si el documento sí lo incluye, vuelve a leer el mes.</p><div class="row">${reread}</div></div>`;
+  const total = E.round2(d.rows.reduce((s, r) => s + Number(r.amount || 0), 0));
+  const diff = d.reportedTotal === null ? null : E.round2(d.reportedTotal - total);
+  const owing = d.rows.filter(r => Number(r.amount) > 0).length;
+  return `<div class="mor"><div class="mor-h"><h4>Reporte de morosidad por departamento ${src('pdf')}</h4><span class="pill neutral">${owing} de ${CONDO.units} departamentos con adeudo</span>${d.asOf ? `<span class="pill neutral">Corte ${esc(d.asOf)}</span>` : ''}${diff === null ? '' : Math.abs(diff) <= 1 ? '<span class="pill ok">Total cuadra</span>' : `<span class="pill bad">Total del reporte difiere ${E.fmtMXN(diff)}</span>`}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Departamento</th><th class="n">Adeudo</th><th class="n">Meses</th><th>Detalle</th><th>Pág.</th></tr></thead><tbody>
+    ${d.rows.map(r => `<tr class="${r.amount === null ? 'flag' : Number(r.months) >= 3 ? 'unc' : ''}"><td>${esc(r.unit)}</td><td class="n">${E.fmtMXN(r.amount)}</td><td class="n">${r.months ?? '—'}</td><td>${esc(r.detail || '')}</td><td class="mono">${r.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td><b>Suma por departamento</b> ${src('motor')}</td><td class="n"><b>${E.fmtMXN(total)}</b></td><td colspan="3">${d.reportedTotal !== null ? `Total del reporte: ${E.fmtMXN(d.reportedTotal)}` : ''}</td></tr></tfoot></table></div></div>`;
 }
 
 function questionView(q, catOpts) {
@@ -705,6 +736,7 @@ function stage3() {
   <section class="panel"><h2>Flujo mensual consolidado ${src('motor')}</h2>${flowTable(ind)}</section>
   <section class="panel"><h2>Evolución del saldo bancario ${src('pdf')}</h2>${svgBalance(ind.months, { accent: '#a5532a' })}</section>
   <section class="panel"><h2>Composición de egresos del período ${src('motor')}</h2>${svgComposition(ind.composition, { accent: '#a5532a' })}</section>
+  ${delinquencyPanel(ind)}
   <section class="panel"><h2>Indicadores de alerta</h2>
     <div class="grid3">
       <div class="kpi"><span class="l">Morosidad conocida</span><span class="v">${ind.delinquentDebt === null ? 'Sin datos' : E.fmtMXN(ind.delinquentDebt)}</span></div>
@@ -722,6 +754,26 @@ function stage3() {
     ${ai && !stale ? '<button class="btn primary" data-go="4">Continuar a hallazgos</button>' : ''}
     ${statusFor('analyze')}
   </div>`;
+}
+
+function delinquencyPanel(ind) {
+  const D = ind.delinquency;
+  if (!D || !D.perMonth.length) return `<section class="panel"><h2>Morosidad por departamento</h2><p>Ninguno de los estados de cuenta confirmados incluye un reporte de morosidad leído. Vuelve a confirmar datos y usa «Volver a leer este mes con Claude» para incorporarlo.</p></section>`;
+  const k = (l, v, sub = '') => `<div class="kpi"><span class="l">${l}</span><span class="v">${v}</span>${sub ? `<span class="l">${sub}</span>` : ''}</div>`;
+  const st = { 'nuevo': 'bad', 'aumentó': 'bad', 'disminuyó': 'ok', 'liquidado': 'ok', 'sin cambio': 'neutral', 'sin comparación': 'neutral' };
+  return `<section class="panel"><h2>Morosidad por departamento ${src('pdf')} ${src('motor')}</h2>
+    ${D.missingPeriods.length ? `<div class="banner warn"><span>Sin reporte de morosidad leído en: ${D.missingPeriods.map(esc).join(', ')}.</span></div>` : ''}
+    <div class="kpis">
+      ${k(`Adeudo total al ${esc(D.latestPeriod)}`, E.fmtMXN(D.latestTotal), D.changePct === null ? '' : `${D.changePct > 0 ? '+' : ''}${D.changePct}% vs. mes anterior`)}
+      ${k('Departamentos con adeudo', `${D.unitsOwing} de ${CONDO.units}`, D.unitsPct === null ? '' : `${D.unitsPct}% del condominio`)}
+      ${k('Con 3 meses o más', String(D.oldDebtUnits.length), E.fmtMXN(D.oldDebtUnits.reduce((s, u) => s + u.current, 0)))}
+      ${k('Índice de morosidad', ind.delinquencyIndexPct === null ? '—' : `${ind.delinquencyIndexPct}%`, 'del ingreso ordinario anualizado')}
+    </div>
+    ${D.perMonth.length > 1 ? `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th class="n">Adeudo total</th><th class="n">Departamentos</th><th class="n">Total del reporte</th></tr></thead><tbody>${D.perMonth.map(p => `<tr><td>${esc(p.period)}</td><td class="n">${E.fmtMXN(p.total)}</td><td class="n">${p.unitsOwing}</td><td class="n">${E.fmtMXN(p.reportedTotal)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <div class="tbl-wrap"><table><thead><tr><th>Departamento</th>${D.periods.map(p => `<th class="n">${esc(p)}</th>`).join('')}<th class="n">Meses</th><th>Tendencia</th></tr></thead><tbody>
+      ${D.units.map(u => `<tr class="${Number(u.monthsOwed) >= 3 && u.current > 0 ? 'unc' : ''}"><td>${esc(u.unit)}</td>${D.periods.map(p => `<td class="n">${p in u.amounts ? E.fmtMXN(u.amounts[p]) : '—'}</td>`).join('')}<td class="n">${u.monthsOwed ?? '—'}</td><td><span class="pill ${st[u.status]}">${esc(u.status)}</span></td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="muted">Filas resaltadas: adeudo de 3 meses o más en el último corte.</p></section>`;
 }
 
 // Lectura del diagnóstico en tres planos visualmente distintos: hechos, interpretación e hipótesis.
@@ -745,7 +797,7 @@ function planeBlock(kind, title, sub, items) {
 }
 
 function findingCard(f, { selectable = false, selected = false } = {}) {
-  const mv = new Map(allMovements().map(m => [m.id, m]));
+  const mv = evidenceIndex();
   const rule = (S.diagnosis?.anomalies || []).find(a => a.id === f.sourceRule);
   const facts = [...(f.facts || [])];
   if (!facts.length && rule) facts.push(rule.detail);
@@ -844,9 +896,18 @@ function stage8() {
     ${S.closedAt ? `<div class="banner ok">Análisis cerrado el ${esc(new Date(S.closedAt).toLocaleString('es-MX'))}.</div>` : '<p>Al cerrar se registra el evento. Seguirás pudiendo consultar y descargar.</p>'}
     <div class="actionbar">
       ${S.closedAt ? '' : `<button class="btn primary" data-act="close" ${dis()}>Cerrar análisis</button>`}
-      <button class="btn danger" data-act="new" ${dis()}>Nuevo análisis</button>
     </div>
-    ${S._confirmNew ? `<div class="banner err" role="alertdialog"><div class="stack"><strong>¿Borrar el caso local?</strong><span>Se eliminará de este navegador el análisis de ${esc(S.condo.name)}. Descarga antes la copia JSON si la necesitas. La conexión con Claude se conserva.</span><div class="row"><button class="btn danger" data-act="new-yes">Sí, borrar e iniciar</button><button class="btn" data-act="new-no">Cancelar</button></div></div></div>` : ''}
+  </section>`;
+}
+
+// Interrumpir el análisis actual y comenzar otro, disponible al final de cada etapa.
+function abandonView() {
+  const hasCase = S.files.length || S.months.length;
+  if (!hasCase) return '';
+  const closed = !!S.closedAt;
+  return `<section class="abandon" id="abandon"><div class="abandon-row"><div class="stack"><strong>${closed ? 'Comenzar otro análisis' : '¿Ya no necesitas este análisis?'}</strong><span class="muted">${closed ? 'El análisis está cerrado. Puedes iniciar otro período.' : 'Puedes interrumpirlo en cualquier etapa y comenzar uno nuevo sin terminarlo.'}</span></div>
+    <button class="btn danger" data-act="new" ${dis(S._confirmNew)}>${closed ? 'Nuevo análisis' : 'Interrumpir y comenzar nuevo análisis'}</button></div>
+    ${S._confirmNew ? `<div class="banner err" role="alertdialog" aria-labelledby="ab-t"><div class="stack"><strong id="ab-t">¿Descartar el análisis actual?</strong><span>Se borrará de este navegador el análisis en curso (${S.months.length ? `${S.months.length} mes${S.months.length === 1 ? '' : 'es'} interpretado${S.months.length === 1 ? '' : 's'}` : `${S.files.length} PDF cargado${S.files.length === 1 ? '' : 's'}`}${closed ? '' : `, etapa ${S.stage} de 8`}). Si quieres conservarlo, descarga antes la copia JSON. La conexión con Claude se conserva.</span><div class="row"><button class="btn" data-act="dl-json">Descargar copia JSON</button><button class="btn danger" data-act="new-yes">Sí, descartar y empezar de nuevo</button><button class="btn ghost" data-act="new-no">Cancelar</button></div></div></div>` : ''}
   </section>`;
 }
 
@@ -897,6 +958,7 @@ document.addEventListener('click', async e => {
       if (f?._file) { S.files = S.files.filter(x => x !== f); return addFiles([f._file]); }
       return;
     }
+    case 'reread': { log('relectura', 'Volver a leer el mes para incorporar la morosidad'); await runInterpret([t.dataset.file]); S._checks = {}; save(); return render(); }
     case 'interpret': { const ok = await runInterpret(); if (ok && S.months.length) go(2); return; }
     case 'apply-answers': {
       const ids = [...new Set(pendingTextAnswers().map(q => S.months.find(m => m.period === q.period)?.fileId).filter(Boolean))];
@@ -924,7 +986,7 @@ document.addEventListener('click', async e => {
       log('orden', S.selection.map(s => s.id).join(' > ')); save(); return render();
     }
     case 'check-all': case 'check-none': {
-      S._checks = Object.fromEntries(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity'].map(k => [k, act === 'check-all']));
+      S._checks = Object.fromEntries(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency'].map(k => [k, act === 'check-all']));
       log('confirmación', act === 'check-all' ? 'Todas las casillas marcadas' : 'Todas las casillas desmarcadas'); save(); return render();
     }
     case 'sel-all': case 'sel-none': {
@@ -949,9 +1011,9 @@ document.addEventListener('click', async e => {
     case 'dl-html': return download(`reporte-${slug(S.condo.name)}-${indicators().periodTo}.html`, standaloneReport(S, indicators(), { logo: LOGO }), 'text/html');
     case 'dl-json': return download(`analisis-${slug(S.condo.name)}-${new Date().toISOString().slice(0, 10)}.json`, exportJSON(), 'application/json');
     case 'close': S.closedAt = now(); log('cierre', 'Análisis cerrado por el usuario'); save(); return render();
-    case 'new': S._confirmNew = true; return render();
+    case 'new': S._confirmNew = true; render(); document.getElementById('abandon')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return;
     case 'new-no': S._confirmNew = false; return render();
-    case 'new-yes': { try { localStorage.removeItem(STORE_KEY); } catch {} S = fresh(); log('nuevo_análisis', ''); save(); return render(); }
+    case 'new-yes': { try { localStorage.removeItem(STORE_KEY); } catch {} PAGE_IMAGES.clear(); for (const k in errors) errors[k] = null; S = fresh(); log('nuevo_análisis', 'Se descartó el análisis anterior'); save(); render(); window.scrollTo({ top: 0 }); return; }
   }
 });
 

@@ -95,6 +95,33 @@ test('reporte con uno o con todos los hallazgos seleccionados', () => {
   assert.throws(() => validateResult('report', mk(['H1', 'H2']), { findings: all.map(id => ({ id })) }));
 });
 
+test('morosidad por departamento: totales, tendencias y reglas', () => {
+  const d = (period, rows, reportedTotal = null) => E.normalizeDelinquency({ found: true, asOf: `${period}-28`, reportedTotal, rows }, period);
+  const ene = month('2026-01', 1000, 1000, [mv('a1', '2026-01-05', 'CUOTA', 100, 'abono'), mv('a2', '2026-01-06', 'CFE', 100, 'cargo')], { delinquency: d('2026-01', [{ unit: 'Torre 1 - 101', amount: 5000, months: 2 }, { unit: 'Torre 4-303', amount: 70, months: 1 }]) });
+  const feb = month('2026-02', 1000, 1000, [mv('b1', '2026-02-05', 'CUOTA', 100, 'abono'), mv('b2', '2026-02-06', 'CFE', 100, 'cargo')], { delinquency: d('2026-02', [{ unit: 'TORRE 1-101', amount: '7,500.00', months: 3 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1 }], 10500) });
+  const D = E.computeDelinquency([ene, feb], 80);
+  assert.equal(D.latestTotal, 10000);
+  assert.equal(D.unitsOwing, 2);
+  assert.equal(D.unitsPct, 2.5);
+  assert.equal(D.changePct, 97.24);
+  const u101 = D.units.find(u => u.key === E.unitKey('Torre 1 - 101'));
+  assert.equal(u101.status, 'aumentó'); assert.equal(u101.change, 2500);
+  assert.equal(D.units.find(u => u.key === E.unitKey('Torre 4-303')).status, 'liquidado');
+  assert.equal(D.units.find(u => u.key === E.unitKey('Torre 2 - 202')).status, 'nuevo');
+  const an = E.detectAnomalies([ene, feb]);
+  assert.ok(an.some(a => a.rule === 'morosidad_creciente' && a.level === 'moderate'));
+  const old = an.find(a => a.rule === 'morosidad_antigua');
+  assert.ok(old && old.evidence[0] === '2026-02-D001');
+  assert.ok(an.some(a => a.rule === 'morosidad_total' && a.amount === 500));
+  const ind = E.computeIndicators([ene, feb], { units: 80 });
+  assert.equal(ind.delinquentDebt, 10000); assert.equal(ind.delinquencySource, 'pdf');
+});
+
+test('un hallazgo puede citar filas de morosidad como evidencia', () => {
+  const r = validateResult('analyze', { executiveSummary: 'x', findings: [1, 2, 3].map(i => ({ id: `H${i}`, title: 't', description: 'd', level: 'moderate', evidence: ['2026-02-D001'] })) }, { movements: [{ id: 'a' }], delinquency: [{ id: '2026-02-D001' }] });
+  assert.equal(r.findings.length, 3);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

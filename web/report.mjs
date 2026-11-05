@@ -116,6 +116,7 @@ export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   const props = S.diagnosis?.ai?.findings || [];
   const movIndex = new Map();
   for (const m of S.months) for (const mv of [...m.movements, ...m.unclassifiedMovements]) movIndex.set(mv.id, mv);
+  for (const m of S.months) for (const r of (m.delinquency?.rows || [])) movIndex.set(r.id, { date: m.delinquency.asOf || m.period, concept: `Adeudo ${r.unit}${r.months ? ` (${r.months} meses)` : ''}`, type: 'morosidad', amount: r.amount });
   const findings = sel.map((s, i) => {
     const p = props.find(f => f.id === s.id) || {};
     const r = (R.findings || []).find(f => f.id === s.id) || {};
@@ -151,14 +152,25 @@ export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   <h2>Estado de fondos especiales <span class="src motor">Motor</span></h2>
   ${fundsTable(ind)}
   ${para(R.fundsAnalysis)}
-  <h2>Estado de morosidad</h2>
-  ${ind.delinquentDebt !== null ? `<p><span class="src user">Usuario</span> Deuda morosa declarada: ${fmtMXN(ind.delinquentDebt)}. <span class="src motor">Motor</span> Índice de morosidad: ${fmtPct(ind.delinquencyIndexPct)} de los ingresos ordinarios anualizados (${fmtMXN(ind.annualizedOrdinaryIncome)}).</p>` : '<p>Los estados de cuenta no contienen datos de morosidad por condómino y no se proporcionaron; no se calcula índice de morosidad.</p>'}
+  <h2>Estado de morosidad por departamento <span class="src pdf">PDF</span> <span class="src motor">Motor</span></h2>
+  ${delinquencySection(ind)}
   ${para(R.delinquencyAnalysis)}
   <h2>Hallazgos prioritarios</h2>${findings}
   ${S.report?.observations ? `<h2>Observaciones del revisor <span class="src user">Usuario</span></h2>${para(S.report.observations)}` : ''}
   <h2>Limitaciones del análisis</h2>${para(R.limitations)}
   ${rv?.approvedAt ? `<div class="approval"><b>Revisión humana:</b> aprobado por ${esc(rv.reviewer)} (${esc(rv.role)}) el ${esc(new Date(rv.approvedAt).toLocaleString('es-MX'))}. Confirmó cifras y cuadre, evidencia de hallazgos y coherencia de recomendaciones. Esta aprobación no es firma electrónica ni acta de Asamblea.</div>` : ''}
   ${includeNote && note ? alertBody(note, S) : ''}`;
+}
+
+function delinquencySection(ind) {
+  const D = ind.delinquency;
+  if (!D || !D.perMonth.length) return '<p>Los estados de cuenta analizados no incluyen un reporte de morosidad leído; no se calcula el estado de morosidad.</p>';
+  const units = D.units.filter(u => u.current > 0 || u.previous > 0);
+  return `<div class="kpis"><div class="kpi"><span class="l">Adeudo total al ${esc(D.latestPeriod)}</span><span class="v">${fmtMXN(D.latestTotal)}</span></div><div class="kpi"><span class="l">Departamentos con adeudo</span><span class="v">${D.unitsOwing}${D.unitsPct !== null ? ` (${fmtPct(D.unitsPct)})` : ''}</span></div><div class="kpi"><span class="l">Con 3 meses o más</span><span class="v">${D.oldDebtUnits.length}</span></div><div class="kpi"><span class="l">Índice de morosidad</span><span class="v">${ind.delinquencyIndexPct === null ? '—' : fmtPct(ind.delinquencyIndexPct)}</span></div></div>
+  ${D.missingPeriods.length ? `<p class="muted">Sin reporte de morosidad en: ${D.missingPeriods.map(esc).join(', ')}.</p>` : ''}
+  <div class="tbl-wrap"><table><thead><tr><th>Departamento</th>${D.periods.map(p => `<th class="n">${esc(p)}</th>`).join('')}<th class="n">Meses</th><th>Tendencia</th></tr></thead><tbody>${units.map(u => `<tr${Number(u.monthsOwed) >= 3 && u.current > 0 ? ' class="flag"' : ''}><td>${esc(u.unit)}</td>${D.periods.map(p => `<td class="n">${p in u.amounts ? fmtMXN(u.amounts[p]) : '—'}</td>`).join('')}<td class="n">${u.monthsOwed ?? '—'}</td><td>${esc(u.status)}</td></tr>`).join('')}
+  <tr><td><b>Total</b></td>${D.perMonth.map(p => `<td class="n"><b>${fmtMXN(p.total)}</b></td>`).join('')}<td></td><td></td></tr></tbody></table></div>
+  <p class="muted">Filas resaltadas: adeudo de 3 meses o más en el último corte. Índice de morosidad = adeudo total ÷ ingresos ordinarios anualizados × 100.</p>`;
 }
 
 export function alertBody(n, S) {

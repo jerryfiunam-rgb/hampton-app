@@ -39,7 +39,7 @@ const MOCK = () => {
         const abono = /CUOTA|APORTACION/.test(m[3]);
         movements.push({ date: `${period}-${m[1]}`, concept: m[3].trim(), amount: Number(m[4].replace(/,/g, '')), type: abono ? 'abono' : 'cargo', category: '', sourcePageNumber: 1, sourceText: line });
       }
-      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
+      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
         'Aritmética bancaria cuadra: 648,404.56 + 212,901.83 − 187,641.84 = 673,664.55 (coincide con el saldo actual del estado de cuenta).',
         'Los movimientos fueron tomados de los reportes de ingresos y egresos (páginas 4 a 8). La página 1 solo muestra el resumen.',
         'El depósito en efectivo de $3,500.00 va a Caja Chica y no forma parte de los abonos bancarios; se incluyó con cash=true.',
@@ -91,10 +91,13 @@ ok((await page.$$('.pill.scan')).length === 5, 'Movimientos leídos de la imagen
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
 ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría > $5,000');
+ok(body2.includes('Reporte de morosidad por departamento') && body2.includes('Torre 2 - 202') && body2.includes('2 de 80 departamentos con adeudo'), 'Morosidad por departamento visible en la confirmación');
+ok(body2.includes('no encontró un reporte de morosidad'), 'Mes sin reporte de morosidad señalado');
+ok(!!(await page.$('#abandon [data-act="new"]')), 'Opción de interrumpir el análisis en la etapa 2');
 await page.click('[data-act="check-all"]');
-ok((await Promise.all(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity'].map(k => page.isChecked(`#chk-${k}`)))).every(Boolean), 'Seleccionar todo marca las siete casillas');
+ok((await Promise.all(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency'].map(k => page.isChecked(`#chk-${k}`)))).every(Boolean), 'Seleccionar todo marca las ocho casillas');
 await page.click('[data-act="check-none"]');
-ok(!(await Promise.all(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity'].map(k => page.isChecked(`#chk-${k}`)))).some(Boolean), 'Deseleccionar todo desmarca las casillas');
+ok(!(await Promise.all(['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency'].map(k => page.isChecked(`#chk-${k}`)))).some(Boolean), 'Deseleccionar todo desmarca las casillas');
 await page.click('[data-act="check-all"]');
 ok(await page.isDisabled('[data-act="confirm"]'), 'La casilla general no permite avanzar con pregunta bloqueante');
 await page.screenshot({ path: `${SHOTS}/2-confirmar.png`, fullPage: false });
@@ -104,7 +107,7 @@ await notesEl.scrollIntoViewIfNeeded(); await notesEl.screenshot({ path: `${SHOT
 const qsel = await page.$('select[data-qcat]');
 await qsel.selectOption('EV_MANTENIMIENTO');
 await page.waitForTimeout(200);
-for (const k of ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity']) if (!(await page.isChecked(`#chk-${k}`))) await page.check(`#chk-${k}`);
+for (const k of ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency']) if (!(await page.isChecked(`#chk-${k}`))) await page.check(`#chk-${k}`);
 // pregunta informativa de texto sin responder: no bloquea
 ok(!(await page.isDisabled('[data-act="confirm"]')), 'Al responder la pregunta se habilita confirmar');
 await page.click('[data-act="confirm"]');
@@ -116,6 +119,8 @@ ok(/Descuadre aritmético en 2026-02/.test(d) && d.includes('$1,000.00'), 'Regla
 ok(/Discontinuidad de saldo 2026-01 → 2026-02/.test(d) && d.includes('$2,000.00'), 'Regla de continuidad: crítico por $2,000');
 ok(/Pago duplicado probable/.test(d), 'Regla de duplicado probable (jardinería)');
 ok(/Sin pago de honorarios/.test(d), 'Regla de honorarios ausentes');
+ok(d.includes('Morosidad por departamento') && /1 departamento\(s\) con 3 o más meses de adeudo/.test(d) && /La morosidad aumentó/.test(d), 'Diagnóstico con morosidad por departamento y reglas de morosidad');
+await (await page.$('text=Morosidad por departamento >> xpath=ancestor::section[1]')).screenshot({ path: `${SHOTS}/morosidad.png` });
 await page.screenshot({ path: `${SHOTS}/3-diagnostico.png`, fullPage: true });
 ok((await page.$$('.plane.fact li')).length === 2 && (await page.$$('.plane.interp li')).length === 2 && (await page.$$('.plane.hyp li')).length === 1, 'Diagnóstico separado en hechos, interpretación e hipótesis');
 ok((await page.$$('.finding .frow.fact')).length === 5 && (await page.$$('.finding .frow.interp')).length === 5, 'Cada hallazgo separa hechos e interpretación');
@@ -149,6 +154,7 @@ await page.click('[data-go="8"]:not(.step)');
 await page.click('[data-act="dl-html"]'); await page.click('[data-act="dl-json"]');
 const saved = await page.evaluate(() => window.__saved);
 ok(saved.length === 2 && saved[0].data.includes('<svg') && saved[0].data.includes('$566,000.00'), 'HTML descargado con gráficos y mismos saldos');
+ok(saved[0].data.includes('Estado de morosidad por departamento') && saved[0].data.includes('Torre 2 - 202'), 'Reporte descargado con morosidad por departamento');
 ok(!/sk-ant|apiKey/.test(saved[1].data) && JSON.parse(saved[1].data).months.length === 3, 'JSON sin credenciales con mapeo');
 fs.writeFileSync(`${SHOTS}/reporte.html`, saved[0].data);
 await page.click('[data-act="close"]');
@@ -160,6 +166,13 @@ await page.click('[data-go="1"]');
 await page.setInputFiles('#json-in', { name: 'copia.json', mimeType: 'application/json', buffer: Buffer.from(saved[1].data) });
 await page.waitForFunction(() => document.querySelector('.stage-head .k')?.textContent.includes('Etapa 2'));
 ok(await page.isDisabled('.step[data-go="3"]'), 'Copia restaurada exige renovar confirmación y aprobaciones');
+await page.click('#abandon [data-act="new"]');
+await page.click('[data-act="new-no"]');
+ok((await page.$$('.files li')).length === 0 || (await page.textContent('.stage-head .k')).includes('Etapa 2'), 'Cancelar conserva el análisis');
+await page.click('#abandon [data-act="new"]');
+await page.click('[data-act="new-yes"]');
+await page.waitForFunction(() => document.querySelector('.stage-head .k')?.textContent.includes('Etapa 1'));
+ok((await page.$$('.files li')).length === 0 && !(await page.$('#abandon')) && await page.isDisabled('.step[data-go="2"]'), 'Interrumpir descarta el caso y vuelve a la etapa 1 vacía');
 const mob = await browser.newPage({ viewport: { width: 390, height: 844 } });
 await mob.route('https://cdnjs.cloudflare.com/**', r => r.fulfill({ path: path.join(PDFJS, path.basename(new URL(r.request().url()).pathname)), contentType: 'text/javascript' }));
 await mob.addInitScript(MOCK);
