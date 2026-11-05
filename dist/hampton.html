@@ -1944,16 +1944,7 @@ async function runAlert() {
 
 async function testConnection() {
   errors.connect = null;
-  if (AI.mode === 'claude.ai') {
-    if (!AI.sample) { errors.connect = AI.error; render(); return; }
-    startBusy('connect', { msg: 'Solicitando permiso a claude.ai…' });
-    try {
-      const r = await AI.sample('Responde únicamente con la palabra OK.', { modelTier: 'quick', cache: false });
-      AI.verified = /ok/i.test(r.text);
-      log('conexión', 'Claude verificado mediante la cuenta de claude.ai');
-    } catch (e) { errors.connect = errorText(e.code, e.message); }
-    endBusy(); render();
-  } else openConnectDialog();
+  if (AI.mode !== 'claude.ai') openConnectDialog();
 }
 
 // ---------- Conexión de servidor (clave API) ----------
@@ -2063,7 +2054,7 @@ function render() {
 
 function connBadge() {
   if (!AI.checked) return '<span class="dot"></span>Comprobando conexión…';
-  if (AI.mode === 'claude.ai') return AI.sample ? `<span class="dot ok"></span>Claude vía claude.ai${AI.verified ? ' · verificado' : ''}` : '<span class="dot err"></span>Claude no disponible';
+  if (AI.mode === 'claude.ai') return AI.sample ? `<span class="dot ok"></span>Claude disponible vía claude.ai` : '<span class="dot err"></span>Claude no disponible';
   return AI.server?.connected ? `<span class="dot ok"></span>Claude conectado · ${esc(AI.server.model)}` : '<span class="dot warn"></span>Claude sin conectar';
 }
 
@@ -2093,10 +2084,13 @@ function stage1() {
     ${errors.files ? `<div class="status err" role="alert">${esc(errors.files)}</div>` : ''}
     ${S.files.length ? `<ul class="files">${S.files.map(f => `<li><div class="stack"><span class="fn">${esc(f.fileName)}</span><span class="meta">${f.status === 'leyendo' ? `<span class="spinner"></span><span data-reading="${f.id}">Leyendo…</span>` : f.status === 'error' ? `<span style="color:var(--crit)">${esc(f.error)}</span>` : `${f.pages.length} pág.${f.pages.some(p => p.scanned) ? ` (${f.pages.filter(p => p.scanned).length} escaneada${f.pages.filter(p => p.scanned).length === 1 ? '' : 's'}${f.pages.some(p => p.scanned) && !PAGE_IMAGES.has(f.id) ? '; vuelve a cargar el PDF para leerlas' : ''})` : ''} · período ${esc(f.period || 'por identificar')} · ${esc(f.status)}`}</span></div><div class="row">${f.status === 'error' && f._file ? `<button class="btn sm" data-act="retry-file" data-id="${f.id}" ${dis()}>Reintentar</button>` : ''}<button class="btn sm danger" data-act="remove-file" data-id="${f.id}" ${dis(S.closedAt)}>Quitar</button></div></li>`).join('')}</ul>` : ''}
   </section>
-  <section class="panel"><h2>Conexión y consentimiento</h2>
-    ${AI.mode === 'claude.ai' ? `<p>Esta versión usa Claude a través de tu sesión de claude.ai: no necesitas clave API. La primera llamada pedirá tu permiso; el consumo corresponde a tu cuenta de Claude.</p>` : `<p>Esta versión llama a la API de Anthropic desde el servidor con tu clave cifrada (AES-GCM). El consumo corresponde a esa cuenta API.</p>`}
-    <div class="row"><button class="btn" data-act="connect" ${dis()}>${AI.mode === 'claude.ai' ? 'Probar conexión con Claude' : AI.server?.connected ? 'Reemplazar o eliminar clave' : 'Conectar Claude'}</button><span class="conn">${connBadge()}</span></div>
-    ${statusFor('connect')}
+  <section class="panel"><h2>${AI.mode === 'claude.ai' ? 'Claude y autorización' : 'Conexión y consentimiento'}</h2>
+    ${AI.mode === 'claude.ai'
+      ? `<div class="row"><span class="conn">${connBadge()}</span></div>
+    ${AI.checked && !AI.sample ? `<div class="banner err" role="alert"><span>${esc(AI.error || 'Claude no está disponible en esta vista.')} Abre la aplicación en claude.ai con tu sesión iniciada.</span></div>` : '<p>La primera lectura te pedirá permiso en claude.ai para usar Claude; el consumo corresponde a tu cuenta.</p>'}`
+      : `<p>Esta versión llama a la API de Anthropic desde el servidor con tu clave cifrada (AES-GCM). El consumo corresponde a esa cuenta API.</p>
+    <div class="row"><button class="btn" data-act="connect" ${dis()}>${AI.server?.connected ? 'Reemplazar o eliminar clave' : 'Conectar Claude'}</button><span class="conn">${connBadge()}</span></div>
+    ${statusFor('connect')}`}
     <label class="check"><input type="checkbox" id="consent" data-bind-check="consent" ${S.consent ? 'checked' : ''}><span>Autorizo enviar a Claude (Anthropic) el texto extraído de los PDFs y el contexto del condominio para su interpretación. Entiendo que los PDF originales no se guardan en ningún servidor y que el consumo corresponde a ${AI.mode === 'claude.ai' ? 'mi cuenta de Claude' : 'la cuenta API conectada'}.</span></label>
   </section>
   <div class="actionbar">

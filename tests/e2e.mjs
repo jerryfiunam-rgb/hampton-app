@@ -88,6 +88,9 @@ await page.setInputFiles('#pdf-in', [path.join(ROOT, 'tests/fixtures/sintetico-2
 await page.waitForFunction(() => document.querySelectorAll('.files li').length === 3 && !document.querySelector('.files .spinner'), null, { timeout: 60000 });
 const filesTxt = await page.textContent('.files');
 ok(filesTxt.includes('2026-01'), 'PDF.js extrae texto y detecta período');
+ok(!(await page.$('[data-act="connect"]')) && (await page.textContent('main')).includes('Claude disponible vía claude.ai') && !!(await page.$('#consent')), 'Sin botón de prueba de conexión; indicador y autorización presentes');
+const connSec = await page.$('text=Claude y autorización >> xpath=ancestor::section[1]');
+await connSec.screenshot({ path: `${SHOTS}/autorizacion.png` });
 ok(/2 pág\. \(1 escaneada\)/.test(filesTxt) && filesTxt.includes('2026-03'), 'PDF mixto: página de texto leída y página escaneada detectada');
 await page.check('#consent');
 await page.screenshot({ path: `${SHOTS}/1-carga.png` });
