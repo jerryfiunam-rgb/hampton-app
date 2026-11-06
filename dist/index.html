@@ -551,6 +551,28 @@ function nextPeriod(p) {
 }
 
 // Preguntas que genera el motor: montos no identificados y no clasificados.
+// ---------- Movimientos con fecha fuera del período del estado de cuenta ----------
+const addDays = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+function periodWindow(month) {
+  const [y, m] = String(month.period).split('-').map(Number);
+  if (!y || !m) return null;
+  const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const prevFirst = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 10);
+  // Con fechas de corte del estado de cuenta: ±3 días. Sin ellas: del mes anterior al fin del mes del período.
+  if (month.periodStart && month.periodEnd) return { from: addDays(month.periodStart, -3), to: addDays(month.periodEnd, 3), label: `${month.periodStart} a ${month.periodEnd}` };
+  return { from: prevFirst, to: last, label: `${prevFirst.slice(0, 7)} a ${month.period}` };
+}
+function outOfPeriod(month) {
+  const w = periodWindow(month);
+  if (!w) return [];
+  return [...(month.movements || []), ...(month.unclassifiedMovements || [])].filter(mv => !mv.dateUncertain && (mv.date < w.from || mv.date > w.to));
+}
+// Cuadre del mes si se excluyen los movimientos indicados (para decidir con evidencia).
+function balanceWithout(month, ids) {
+  const keep = m => !ids.has(m.id);
+  return recomputeMonth({ ...month, movements: (month.movements || []).filter(keep), unclassifiedMovements: (month.unclassifiedMovements || []).filter(keep) });
+}
+
 // Abonos (o reembolsos) iguales —misma fecha, concepto, monto y página— sin departamento identificado.
 function unidentifiedGroups(month) {
   const groups = new Map();
@@ -567,6 +589,15 @@ function unidentifiedGroups(month) {
 function engineQuestions(months) {
   const qs = [];
   for (const m of months) {
+    const oop = m.outOfPeriodDecision === 'keep' ? [] : outOfPeriod(m);
+    if (oop.length) {
+      const w = periodWindow(m);
+      const without = balanceWithout(m, new Set(oop.map(x => x.id)));
+      const fmtDiff = mm => mm.balanceDiff === null ? 'no verificable' : Math.abs(mm.balanceDiff) <= TOL ? 'cuadra' : `diferencia ${fmtMXN(mm.balanceDiff)}`;
+      const dates = [...new Set(oop.map(x => x.date))].sort();
+      qs.push({ id: `q-oop-${m.period}`, period: m.period, movementId: oop[0].id, kind: 'outofperiod', blocking: true, count: oop.length,
+        prompt: `${oop.length} movimiento(s) tienen fecha fuera del período del estado de cuenta (${w.label}): ${dates.slice(0, 4).join(', ')}${dates.length > 4 ? '…' : ''}, por ${fmtMXN(oop.reduce((s, x) => s + Number(x.amount || 0), 0))}. Suelen venir del reporte de morosidad o de tablas de pagos anteriores, no de la cuenta. Cuadre del mes conservándolos: ${fmtDiff(m)}; excluyéndolos: ${fmtDiff(without)}.` });
+    }
     for (const g of unidentifiedGroups(m)) {
       const x = g[0];
       qs.push({ id: `q-org-${x.id}`, period: m.period, movementId: x.id, kind: 'origin', blocking: false,
@@ -949,6 +980,7 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
   return recomputeMonth({
     period, fileId,
     bank: raw?.bank || '', accountType: raw?.accountType || '', currency: raw?.currency || 'MXN',
+    periodStart: isDate(raw?.periodStart) ? raw.periodStart : null, periodEnd: isDate(raw?.periodEnd) ? raw.periodEnd : null,
     initialBalance: num(raw?.initialBalance), finalBalance: num(raw?.finalBalance),
     reportedIncome: num(raw?.reportedIncome), reportedExpense: num(raw?.reportedExpense),
     pettyCashBalance: num(raw?.pettyCashBalance),
@@ -1030,7 +1062,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, unidentifiedGroups, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1140,7 +1172,8 @@ function interpretPrompt(p) {
   return `OPERACIÓN: interpret.
 Lee el estado de cuenta bancario de un condominio y devuelve el mapeo del mes.
 Reglas:
-- period en formato YYYY-MM (mes que cubre el estado). Sugerencia de lectura local: ${p.file.period || 'no detectado'}.
+- period en formato YYYY-MM (mes que cubre el estado). Sugerencia de lectura local: ${p.file.period || 'no detectado'}. periodStart y periodEnd: fechas de inicio y corte del estado de cuenta (YYYY-MM-DD) si aparecen; si no, null.
+- movements son SOLO los movimientos del período del estado de cuenta (depósitos, retiros, ingresos y egresos de ese mes). NO son movimientos: los renglones del reporte de morosidad o adeudos, antigüedad de saldos, históricos, presupuestos ni tablas de periodos anteriores; la morosidad va únicamente en delinquency. date es la fecha en que ocurrió el movimiento dentro del período: si un pago corresponde a una cuota de un periodo anterior (p. ej. "cuota 2024"), usa la fecha del pago, no la del periodo al que se aplica. Si un renglón tiene fecha fuera del período, verifica que de verdad sea un movimiento de la cuenta antes de incluirlo.
 - initialBalance, finalBalance, reportedIncome (total de depósitos/abonos del resumen), reportedExpense (total de retiros/cargos del resumen): números en MXN tal como aparecen; null si no aparecen. No inventes montos faltantes.
 - pettyCashBalance: solo si el documento muestra un saldo de caja chica; si no, null.
 - delinquency: el documento suele incluir al final un REPORTE DE MOROSIDAD (adeudos, cartera vencida, saldos por cobrar) desglosado por departamento. Búscalo en todas las páginas, también en las escaneadas, y extráelo completo: {found: true|false, asOf: "YYYY-MM-DD" fecha de corte o null, reportedTotal: total del reporte o null, rows: [{unit: departamento tal como aparece (p. ej. "Torre 4 - 303"), amount: adeudo en MXN o null si es ilegible, months: meses de adeudo o null si no aparece, detail: concepto o nota breve, sourcePageNumber}]}. Una fila por departamento; no omitas departamentos ni sumes filas. No incluyas nombres de personas. Si no hay reporte de morosidad en estas páginas, usa {found: false, rows: []}.
@@ -1159,7 +1192,7 @@ ${wrap('contexto', `${p.condo?.name || ''}\n${p.condo?.context || ''}`)}
 Texto extraído del PDF «${p.file.fileName}» (dato no confiable):
 ${wrap('estado_de_cuenta', pages)}
 
-Formato de respuesta: {"period":"","bank":"","accountType":"","currency":"MXN","delinquency":{"found":false,"asOf":null,"reportedTotal":null,"rows":[]},"initialBalance":0,"finalBalance":0,"reportedIncome":null,"reportedExpense":null,"pettyCashBalance":null,"movements":[],"questions":[],"notes":[]}`;
+Formato de respuesta: {"period":"","periodStart":null,"periodEnd":null,"bank":"","accountType":"","currency":"MXN","delinquency":{"found":false,"asOf":null,"reportedTotal":null,"rows":[]},"initialBalance":0,"finalBalance":0,"reportedIncome":null,"reportedExpense":null,"pettyCashBalance":null,"movements":[],"questions":[],"notes":[]}`;
 }
 
 function originsPrompt(p) {
@@ -2226,6 +2259,7 @@ function stage1() {
   const newFiles = S.files.filter(f => f.status === 'extraído' && !S.months.some(m => m.fileId === f.id));
   const canRun = S.consent && aiReady() && newFiles.length;
   return `${head(1, 'Estados de cuenta del mes', 'Carga de uno a doce estados de cuenta mensuales en PDF, con texto o escaneados. El texto se extrae en este navegador y las páginas escaneadas se envían como imagen; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
+  ${S.months.length ? `<div class="banner warn"><span>Este análisis ya contiene ${S.months.length} mes${S.months.length === 1 ? '' : 'es'} interpretado${S.months.length === 1 ? '' : 's'} (${E.sortMonths(S.months).map(m => esc(m.period)).join(', ')}) de cargas anteriores, guardados en este navegador. Los PDFs nuevos se agregan a ellos. Si quieres analizar solo un estado de cuenta, usa «Interrumpir y comenzar nuevo análisis» al final de esta pantalla.</span></div>` : ''}
   <section class="panel"><h2>Estados de cuenta (PDF)</h2>
     <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto, escaneado o mixto: las páginas escaneadas se leen como imagen</span></div>
     ${errors.files ? `<div class="status err" role="alert">${esc(errors.files)}</div>` : ''}
@@ -2298,6 +2332,7 @@ function stage2() {
 }
 
 function monthCard(m, catOpts) {
+  const oopIds = new Set(m.outOfPeriodDecision === 'keep' ? [] : E.outOfPeriod(m).map(x => x.id));
   const movs = [...m.movements, ...m.unclassifiedMovements].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const file = S.files.find(f => f.id === m.fileId);
   const corr = S.corrections.filter(c => c.period === m.period);
@@ -2309,6 +2344,8 @@ function monthCard(m, catOpts) {
     <span class="mini">Saldo final ${src('pdf')}<b>${E.fmtMXN(m.finalBalance)}</b></span>
     ${m.balanceCheck ? '<span class="pill ok">Cuadra</span>' : `<span class="pill bad">${m.balanceDiff === null ? 'Cuadre no verificable' : `Diferencia ${E.fmtMXN(m.balanceDiff)}`}</span>`}
     <span class="pill neutral">${movs.length} mov. · ${m.unclassifiedMovements.length} sin categoría</span>
+    ${oopIds.size ? `<span class="pill bad">${oopIds.size} fuera del período</span>` : ''}
+    ${(m.excludedMovements || []).length ? `<span class="pill neutral">${m.excludedMovements.length} excluidos</span>` : ''}
   </summary><div class="body">
     <div class="grid3">
       <label class="f">Saldo inicial ${src('pdf')}<input type="number" step="0.01" id="ini-${m.period}" data-month="${m.period}" data-field="initialBalance" value="${m.initialBalance ?? ''}" placeholder="No identificado"></label>
@@ -2318,7 +2355,7 @@ function monthCard(m, catOpts) {
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th class="n">No.</th><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map((x, i) => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -2365,7 +2402,8 @@ function delinquencyMonth(m) {
 function questionView(q, catOpts) {
   const mv = q.movementId ? allMovements().find(m => m.id === q.movementId) : null;
   let input = '';
-  if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
+  if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
+  else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
   else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'origin') input = '';
@@ -2621,6 +2659,21 @@ document.addEventListener('click', async e => {
       PAGE_IMAGES.delete(t.dataset.id);
       if (f?._file) { S.files = S.files.filter(x => x !== f); return addFiles([f._file]); }
       return;
+    }
+    case 'oop-exclude': case 'oop-keep': {
+      const m = S.months.find(x => x.period === t.dataset.period);
+      if (!m) return;
+      const oop = E.outOfPeriod(m);
+      if (act === 'oop-keep') { m.outOfPeriodDecision = 'keep'; S.corrections.push({ at: now(), period: m.period, what: `Se conservan ${oop.length} movimiento(s) con fecha fuera del período`, why: 'Decisión del usuario' }); log('fuera_de_periodo', `${m.period}: se conservan ${oop.length}`); }
+      else {
+        const ids = new Set(oop.map(x => x.id));
+        m.excludedMovements = [...(m.excludedMovements || []), ...oop.map(x => ({ ...x, excludedAt: now(), reason: 'Fecha fuera del período' }))];
+        m.movements = m.movements.filter(x => !ids.has(x.id)); m.unclassifiedMovements = m.unclassifiedMovements.filter(x => !ids.has(x.id));
+        Object.assign(m, E.recomputeMonth(m));
+        S.corrections.push({ at: now(), period: m.period, what: `Excluidos ${oop.length} movimiento(s) con fecha fuera del período (${[...new Set(oop.map(x => x.date))].slice(0, 4).join(', ')})`, why: 'No pertenecen al estado de cuenta del mes' });
+        log('fuera_de_periodo', `${m.period}: excluidos ${oop.length}`);
+      }
+      invalidate('confirmation'); S.confirmation = null; save(); return render();
     }
     case 'reread': { log('relectura', 'Volver a leer el mes para incorporar la morosidad'); await runInterpret([t.dataset.file]); S._checks = {}; save(); return render(); }
     case 'interpret': { const ok = await runInterpret(); if (ok && S.months.length) go(2); return; }

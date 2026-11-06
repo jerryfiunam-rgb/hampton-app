@@ -54,6 +54,7 @@ const MOCK = () => {
         const abono = /CUOTA|APORTACION/.test(m[3]);
         movements.push({ date: `${period}-${m[1]}`, concept: m[3].trim(), amount: Number(m[4].replace(/,/g, '')), type: abono ? 'abono' : 'cargo', category: '', sourcePageNumber: 1, sourceText: line });
       }
+      if (period === '2026-02') movements.push({ date: '2024-01-02', concept: 'Torre 3 - 402 Cuota de fondo de reserva 2024', amount: 1200, type: 'abono', category: '', sourcePageNumber: 1 });
       out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-03' ? { found: false, rows: [] } : period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
         'Aritmética bancaria cuadra: 648,404.56 + 212,901.83 − 187,641.84 = 673,664.55 (coincide con el saldo actual del estado de cuenta).',
         'Los movimientos fueron tomados de los reportes de ingresos y egresos (páginas 4 a 8). La página 1 solo muestra el resumen.',
@@ -157,6 +158,13 @@ const qsel = await page.$('select[data-qcat]');
 await qsel.selectOption('EV_MANTENIMIENTO');
 await page.waitForTimeout(200);
 for (const k of ['currency', 'bank', 'period', 'categories', 'funds', 'arithmetic', 'continuity', 'delinquency']) if (!(await page.isChecked(`#chk-${k}`))) await page.check(`#chk-${k}`);
+const oopTxt = await page.textContent('#q-q-oop-2026-02');
+ok(/1 movimiento\(s\) tienen fecha fuera del período/.test(oopTxt) && oopTxt.includes('2024-01-02') && /excluyéndolos: diferencia \$1,000\.00/.test(oopTxt) && (await page.$$('td .pill.bad:text("Fuera del período")')).length === 1, 'Movimiento de 2024 detectado fuera del período, con el cuadre de cada opción');
+ok(await page.isDisabled('[data-act="confirm"]'), 'Fuera del período bloquea la confirmación hasta decidir');
+await page.click('[data-act="oop-exclude"][data-period="2026-02"]');
+await page.waitForTimeout(150);
+ok(!(await page.$('#q-q-oop-2026-02')) && (await page.textContent('main')).includes('1 excluidos') && (await page.textContent('main')).includes('Excluidos 1 movimiento(s) con fecha fuera del período'), 'Excluir quita el movimiento y lo documenta');
+if (!(await page.isDisabled('[data-act="check-all"]'))) await page.click('[data-act="check-all"]');
 // pregunta informativa de texto sin responder: no bloquea
 ok(!(await page.isDisabled('[data-act="confirm"]')), 'Al responder la pregunta se habilita confirmar');
 await page.click('[data-act="confirm"]');

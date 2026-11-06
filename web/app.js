@@ -732,6 +732,7 @@ function stage1() {
   const newFiles = S.files.filter(f => f.status === 'extraído' && !S.months.some(m => m.fileId === f.id));
   const canRun = S.consent && aiReady() && newFiles.length;
   return `${head(1, 'Estados de cuenta del mes', 'Carga de uno a doce estados de cuenta mensuales en PDF, con texto o escaneados. El texto se extrae en este navegador y las páginas escaneadas se envían como imagen; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
+  ${S.months.length ? `<div class="banner warn"><span>Este análisis ya contiene ${S.months.length} mes${S.months.length === 1 ? '' : 'es'} interpretado${S.months.length === 1 ? '' : 's'} (${E.sortMonths(S.months).map(m => esc(m.period)).join(', ')}) de cargas anteriores, guardados en este navegador. Los PDFs nuevos se agregan a ellos. Si quieres analizar solo un estado de cuenta, usa «Interrumpir y comenzar nuevo análisis» al final de esta pantalla.</span></div>` : ''}
   <section class="panel"><h2>Estados de cuenta (PDF)</h2>
     <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto, escaneado o mixto: las páginas escaneadas se leen como imagen</span></div>
     ${errors.files ? `<div class="status err" role="alert">${esc(errors.files)}</div>` : ''}
@@ -804,6 +805,7 @@ function stage2() {
 }
 
 function monthCard(m, catOpts) {
+  const oopIds = new Set(m.outOfPeriodDecision === 'keep' ? [] : E.outOfPeriod(m).map(x => x.id));
   const movs = [...m.movements, ...m.unclassifiedMovements].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const file = S.files.find(f => f.id === m.fileId);
   const corr = S.corrections.filter(c => c.period === m.period);
@@ -815,6 +817,8 @@ function monthCard(m, catOpts) {
     <span class="mini">Saldo final ${src('pdf')}<b>${E.fmtMXN(m.finalBalance)}</b></span>
     ${m.balanceCheck ? '<span class="pill ok">Cuadra</span>' : `<span class="pill bad">${m.balanceDiff === null ? 'Cuadre no verificable' : `Diferencia ${E.fmtMXN(m.balanceDiff)}`}</span>`}
     <span class="pill neutral">${movs.length} mov. · ${m.unclassifiedMovements.length} sin categoría</span>
+    ${oopIds.size ? `<span class="pill bad">${oopIds.size} fuera del período</span>` : ''}
+    ${(m.excludedMovements || []).length ? `<span class="pill neutral">${m.excludedMovements.length} excluidos</span>` : ''}
   </summary><div class="body">
     <div class="grid3">
       <label class="f">Saldo inicial ${src('pdf')}<input type="number" step="0.01" id="ini-${m.period}" data-month="${m.period}" data-field="initialBalance" value="${m.initialBalance ?? ''}" placeholder="No identificado"></label>
@@ -824,7 +828,7 @@ function monthCard(m, catOpts) {
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th class="n">No.</th><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map((x, i) => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -871,7 +875,8 @@ function delinquencyMonth(m) {
 function questionView(q, catOpts) {
   const mv = q.movementId ? allMovements().find(m => m.id === q.movementId) : null;
   let input = '';
-  if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
+  if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
+  else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
   else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'origin') input = '';
@@ -1127,6 +1132,21 @@ document.addEventListener('click', async e => {
       PAGE_IMAGES.delete(t.dataset.id);
       if (f?._file) { S.files = S.files.filter(x => x !== f); return addFiles([f._file]); }
       return;
+    }
+    case 'oop-exclude': case 'oop-keep': {
+      const m = S.months.find(x => x.period === t.dataset.period);
+      if (!m) return;
+      const oop = E.outOfPeriod(m);
+      if (act === 'oop-keep') { m.outOfPeriodDecision = 'keep'; S.corrections.push({ at: now(), period: m.period, what: `Se conservan ${oop.length} movimiento(s) con fecha fuera del período`, why: 'Decisión del usuario' }); log('fuera_de_periodo', `${m.period}: se conservan ${oop.length}`); }
+      else {
+        const ids = new Set(oop.map(x => x.id));
+        m.excludedMovements = [...(m.excludedMovements || []), ...oop.map(x => ({ ...x, excludedAt: now(), reason: 'Fecha fuera del período' }))];
+        m.movements = m.movements.filter(x => !ids.has(x.id)); m.unclassifiedMovements = m.unclassifiedMovements.filter(x => !ids.has(x.id));
+        Object.assign(m, E.recomputeMonth(m));
+        S.corrections.push({ at: now(), period: m.period, what: `Excluidos ${oop.length} movimiento(s) con fecha fuera del período (${[...new Set(oop.map(x => x.date))].slice(0, 4).join(', ')})`, why: 'No pertenecen al estado de cuenta del mes' });
+        log('fuera_de_periodo', `${m.period}: excluidos ${oop.length}`);
+      }
+      invalidate('confirmation'); S.confirmation = null; save(); return render();
     }
     case 'reread': { log('relectura', 'Volver a leer el mes para incorporar la morosidad'); await runInterpret([t.dataset.file]); S._checks = {}; save(); return render(); }
     case 'interpret': { const ok = await runInterpret(); if (ok && S.months.length) go(2); return; }

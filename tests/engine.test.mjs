@@ -158,6 +158,21 @@ test('abonos idénticos sin departamento generan aviso y se pueden resolver', ()
   assert.deepEqual(r.origins.map(o => [o.i, o.duplicate]), [[0, false], [1, false], [2, true]]);
 });
 
+test('movimientos con fecha fuera del período', () => {
+  const inP = mv('a', '2026-04-10', 'CUOTA', 2500, 'abono');
+  const old = mv('b', '2024-01-02', 'Torre 3 - 402 Cuota de fondo de reserva 2024', 1200, 'abono');
+  const m = month('2026-04', 10000, 12500, [inP, old]);
+  assert.deepEqual(E.outOfPeriod(m).map(x => x.id), ['b']);
+  const q = E.engineQuestions([m]).find(x => x.kind === 'outofperiod');
+  assert.ok(q.blocking && /excluyéndolos: cuadra/.test(q.prompt) && /conservándolos: diferencia/.test(q.prompt));
+  assert.equal(E.engineQuestions([{ ...m, outOfPeriodDecision: 'keep' }]).filter(x => x.kind === 'outofperiod').length, 0);
+  // corte a mitad de mes: fechas del mes anterior dentro de las fechas de corte son válidas
+  const cut = month('2026-04', 0, 0, [mv('c', '2026-03-20', 'CUOTA', 1, 'abono')], { periodStart: '2026-03-15', periodEnd: '2026-04-14' });
+  assert.equal(E.outOfPeriod(cut).length, 0);
+  const late = month('2026-04', 0, 0, [mv('d', '2026-04-25', 'CUOTA', 1, 'abono')], { periodStart: '2026-03-15', periodEnd: '2026-04-14' });
+  assert.equal(E.outOfPeriod(late).length, 1);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };
