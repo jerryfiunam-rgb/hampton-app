@@ -332,6 +332,7 @@ td .origin-in.empty { background: rgba(196,128,0,.06); border-style: dashed; }
 td select.fund-sel { min-width: 0; width: 196px; font-size: 12.5px; }
 td select.fund-sel.none { color: var(--ink-3); border-style: dashed; }
 td select.fund-sel.special { border-color: var(--obs); }
-td.mono:first-child { white-space: nowrap; }
+td.date-c { white-space: nowrap; }
+td.rownum { color: var(--ink-3); font-size: 12px; width: 1%; }
 td select.fund-sel { width: 176px; }
 .month td select[data-cat] { min-width: 0; width: 180px; }
