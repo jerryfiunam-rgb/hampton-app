@@ -89,12 +89,29 @@ await page.route('https://fonts.googleapis.com/**', r => r.abort());
 await page.addInitScript(MOCK);
 await page.goto('file://' + path.join(ROOT, 'dist/index.html'));
 const ok = (c, m) => { if (!c) throw new Error('FALLÓ: ' + m); console.log('✓', m); };
+async function checkJustified(etapa) {
+const notJustified = await page.evaluate(() => {
+  const main = document.querySelector('main');
+  const bad = [];
+  for (const el of main.querySelectorAll('p, li, .lead, .summary, .rc-d, .kpi .s')) {
+    if (!el.textContent.trim() || el.closest('td, .pill, .btn, .topbar, .drop, .legend')) continue;
+    const cs = getComputedStyle(el);
+    if (cs.textAlign !== 'justify') bad.push(el.className || el.tagName);
+    const parent = el.parentElement.getBoundingClientRect().width, w = el.getBoundingClientRect().width;
+    if (cs.display === 'block' && parent - w > 60 && !el.closest('li, .kpi, .q-actions, .row, .mf, .mail-sign')) bad.push(`ancho ${el.className || el.tagName} ${Math.round(w)}/${Math.round(parent)}`);
+  }
+  return bad;
+});
+ok(notJustified.length === 0, `Textos justificados y a todo el ancho (${etapa}): ` + notJustified.slice(0, 5).join(', '));
+}
+
 
 ok((await page.textContent('header')).includes('Análisis de estados de cuenta - Condominio Hampton Court') && !(await page.$('#c-name')), 'Encabezado fijo del condominio, sin captura de datos');
 await page.setInputFiles('#pdf-in', [path.join(ROOT, 'tests/fixtures/sintetico-2026-01.pdf'), path.join(ROOT, 'tests/fixtures/sintetico-2026-02.pdf'), path.join(ROOT, 'tests/fixtures/sintetico-2026-03-mixto.pdf')]);
 await page.waitForFunction(() => document.querySelectorAll('.files li').length === 3 && !document.querySelector('.files .spinner'), null, { timeout: 60000 });
 const filesTxt = await page.textContent('.files');
 ok(filesTxt.includes('2026-01'), 'PDF.js extrae texto y detecta período');
+await checkJustified('carga de PDFs');
 ok(!(await page.$('[data-act="connect"]')) && (await page.textContent('main')).includes('Claude disponible vía claude.ai') && !!(await page.$('#consent')), 'Sin botón de prueba de conexión; indicador y autorización presentes');
 const connSec = await page.$('text=Claude y autorización >> xpath=ancestor::section[1]');
 await connSec.screenshot({ path: `${SHOTS}/autorizacion.png` });
@@ -127,6 +144,7 @@ ok(!mainTxt.includes('abonos iguales «Cuota ordinaria marzo 2026»'), 'Sin avis
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
 ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría > $5,000');
+await checkJustified('confirmar datos');
 const qLuz = await page.$('.q:has-text("El cargo de $6,200.00 del 12/01/2026")');
 const luzLink = qLuz ? await qLuz.$('[data-scroll^="mv-"]') : null;
 ok(!!luzLink && (await luzLink.getAttribute('data-scroll')) === 'mv-2026-01-004', 'Pregunta de Claude ligada a su movimiento por monto y fecha');
@@ -207,6 +225,7 @@ await page.screenshot({ path: `${SHOTS}/3-diagnostico.png`, fullPage: true });
 ok((await page.$$('.plane.fact li')).length === 2 && (await page.$$('.plane.interp li')).length === 2 && (await page.$$('.plane.hyp li')).length === 1, 'Diagnóstico separado en hechos, interpretación e hipótesis');
 ok((await page.$$('.finding .frow.fact')).length === 5 && (await page.$$('.finding .frow.interp')).length === 5, 'Cada hallazgo separa hechos e interpretación');
 ok(await page.$eval('.plane.interp li span', el => getComputedStyle(el).textAlign) === 'justify', 'Texto justificado');
+await checkJustified('diagnóstico');
 await (await page.$('.planes')).screenshot({ path: `${SHOTS}/planos.png` });
 await (await page.$('.finding')).screenshot({ path: `${SHOTS}/hallazgo.png` });
 await page.click('text=Continuar a hallazgos');
@@ -240,6 +259,7 @@ await page.check('#rv-c'); await page.fill('#rv-name', 'Revisor de prueba');
 await page.click('[data-act="approve"]');
 await page.waitForSelector('[data-act="accept-alert"]');
 ok(true, 'Aprobación genera nota de alerta (>400 palabras aceptada)');
+await checkJustified('nota final');
 const alertPrompt = await page.evaluate(() => window.__alertPrompt);
 ok(alertPrompt.includes('a nombre de un condómino') && alertPrompt.includes('c.c. Comité de Vigilancia') && alertPrompt.includes('comprobante del pago SPEI 4471'), 'La nota se redacta según el rol (condómino) e incluye las observaciones');
 const mail = await page.$('.doc article.mail');

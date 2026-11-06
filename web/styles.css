@@ -79,7 +79,7 @@ h1, h2, h3 { font-family: var(--f-head); text-wrap: balance; margin: 0; letter-s
 h1 { font-family: var(--f-display); font-weight: 600; font-size: 27px; line-height: 1.2; letter-spacing: .01em; }
 h2 { font-size: 19px; }
 h3 { font-size: 16px; }
-.lead { color: var(--ink-2); max-width: 70ch; margin: 0; }
+.lead { color: var(--ink-2); margin: 0; }
 p { margin: 0; }
 
 .panel { background: var(--surface); box-shadow: 0 1px 2px rgba(35,33,26,.05); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -224,7 +224,7 @@ details.log .inner { padding: 0 16px 16px; display: flex; flex-direction: column
 .notes-b { padding: 0 14px 14px; display: grid; gap: 14px; }
 .ng h4 { margin: 0 0 8px; font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
 .ng ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.ng li { border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: 9px 12px; display: grid; gap: 3px; max-width: 80ch; }
+.ng li { border-left: 3px solid var(--line-strong); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: 9px 12px; display: grid; gap: 3px; }
 .ng li strong { font-size: 14px; color: var(--ink); }
 .ng li p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
 .ng.inconsistencia li { border-left-color: var(--mod); }
@@ -237,8 +237,7 @@ details.log .inner { padding: 0 16px 16px; display: flex; flex-direction: column
 p, li, .lead, .banner, .check > span, .ng li p, .fbody, .plane li > span:last-child { text-align: justify; text-justify: inter-word; hyphens: auto; -webkit-hyphens: auto; }
 .topbar, .topbar *, .drop, .drop * { text-align: center; }
 .topbar p, .drop p { text-align: center; }
-.lead { max-width: 75ch; }
-.summary { font-size: 15.5px; line-height: 1.6; max-width: 80ch; }
+.summary { font-size: 15.5px; line-height: 1.6; }
 
 /* Diagnóstico: tres planos */
 .planes { display: grid; gap: 14px; }
@@ -361,7 +360,17 @@ tr.flash td { animation: flashrow 2.6s ease-out; }
 .obs-list textarea { min-height: 52px; font-size: 13.5px; }
 
 /* Explicación de cada indicador */
-.kpi .s { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; text-align: left; hyphens: manual; }
+.kpi .s { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
 .kpi .s.w { color: var(--mod); }
 .kpis-6 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
 .btn.danger-text { color: var(--crit); }
+
+/* Justificado general: párrafos, listas y textos descriptivos ocupan todo el ancho de su recuadro,
+   para que el borde derecho coincida con el resto de la página. */
+p, li, dd, .lead, .summary, .banner, .banner > span, .check > span, .rc-d, .kpi .s, .status .sub, .q p, .fbody, .plane li > span:last-child, .ng li p, .abandon .muted, label.f .hint {
+  text-align: justify; text-justify: inter-word; hyphens: auto; -webkit-hyphens: auto;
+}
+.topbar, .topbar *, .drop, .drop *, td, th, .pill, .btn, .src, .legend, .mini, .kpi .l, .kpi .v, .stage-head .k, h1, h2, h3, h4 { text-align: revert-layer; }
+.topbar, .topbar *, .drop, .drop * { text-align: center; }
+td, th { text-align: left; }
+td.n, th.n { text-align: right; }
