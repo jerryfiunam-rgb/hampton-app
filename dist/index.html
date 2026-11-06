@@ -351,6 +351,22 @@ tr.fund-op td { background: var(--ivy-soft); }
 tr.flash td { animation: flashrow 2.6s ease-out; }
 @media (prefers-reduced-motion: reduce) { tr.flash td { animation: none; background: rgba(165, 83, 42, .18); } }
 
+/* Rol de quien revisa */
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.role-card { border: 1.5px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 4px; cursor: pointer; background: var(--surface-2); position: relative; }
+.role-card input { position: absolute; opacity: 0; pointer-events: none; }
+.role-card.on { border-color: var(--brick); background: var(--surface); box-shadow: inset 0 0 0 1px var(--brick); }
+.role-card:focus-within { outline: 2px solid var(--brick); outline-offset: 2px; }
+.rc-t { font-weight: 600; font-size: 14.5px; }
+.rc-d { font-size: 13px; color: var(--ink-2); }
+.rc-n { font-size: 12px; color: var(--ink-3); font-family: var(--f-mono); }
+.obs-draft textarea { min-height: 56px; font-size: 13.5px; }
+.q-actions { gap: 8px; }
+.q-answer { border-top: 1px dashed var(--line-strong); padding-top: 8px; }
+.obs-list { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+.obs-list li { display: grid; gap: 6px; }
+.obs-list textarea { min-height: 52px; font-size: 13.5px; }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -654,6 +670,16 @@ function engineQuestions(months) {
       }
     }
   }
+  // Redacción sugerida para enviar la aclaración como observación a la administración.
+  const movOf = q => q.movementId ? months.flatMap(m => [...(m.movements || []), ...(m.unclassifiedMovements || [])]).find(x => x.id === q.movementId) : null;
+  for (const q of qs) {
+    const mv = movOf(q);
+    q.observationDraft = q.kind === 'balance' ? `Se solicita a la administración confirmar el ${q.field === 'initialBalance' ? 'saldo inicial' : 'saldo final'} de ${q.period}, que no aparece de forma legible en el estado de cuenta.`
+      : q.kind === 'amount' && mv ? `Se solicita a la administración confirmar el monto del movimiento «${mv.concept}» del ${mv.date}, que no es legible en el estado de cuenta.`
+      : q.kind === 'category' && mv ? `Se solicita a la administración aclarar el concepto y destino del ${mv.type} «${mv.concept}» del ${mv.date} por ${fmtMXN(mv.amount)}, y presentar el comprobante correspondiente.`
+      : q.kind === 'origin' && mv ? `Se solicita a la administración indicar de qué departamento proviene cada uno de los abonos «${mv.concept}» por ${fmtMXN(mv.amount)} del ${mv.date}.`
+      : `Se solicita a la administración aclarar lo siguiente: ${q.prompt}`;
+  }
   return qs;
 }
 
@@ -854,7 +880,7 @@ function computeDelinquency(months, units = null) {
   };
 }
 
-function detectAnomalies(months, indicators) {
+function detectAnomalies(months, indicators, opts = {}) {
   const ms = sortMonths(months.map(recomputeMonth));
   const ind = indicators || computeIndicators(ms);
   const out = [];
@@ -980,6 +1006,15 @@ function detectAnomalies(months, indicators) {
         `${D.oldDebtUnits.slice(0, 8).map(u => `${u.unit}: ${fmtMXN(u.current)} (${u.monthsOwed} meses)`).join('; ')}. Total: ${fmtMXN(tot)}.`, D.oldDebtUnits.slice(0, 8).map(u => u.latestId), { period: D.latestPeriod, amount: tot });
     }
   }
+  // aclaraciones enviadas como observación: el movimiento queda «sin aclarar» y es hallazgo candidato
+  const byId = new Map(ms.flatMap(m => allMovs(m).map(x => [x.id, { ...x, period: m.period }])));
+  for (const o of opts.observations || []) {
+    const mv = o.movementId ? byId.get(o.movementId) : null;
+    if (!mv || out.some(a => a.evidence.includes(mv.id))) continue;
+    const level = o.blocking ? 'critical' : Number(mv.amount) >= 5000 ? 'moderate' : 'observation';
+    add('sin_aclarar', level, 'observation', `Movimiento sin aclarar: «${mv.concept}»`,
+      `${mv.date}, ${mv.type} por ${fmtMXN(mv.amount)}. Se envió como observación a la administración: «${o.text}».`, [mv.id], { period: mv.period, amount: mv.amount });
+  }
   return out;
 }
 
@@ -1040,11 +1075,19 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
     reportedIncome: num(raw?.reportedIncome), reportedExpense: num(raw?.reportedExpense),
     pettyCashBalance: num(raw?.pettyCashBalance),
     movements: movs, unclassifiedMovements: [],
-    aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null, movementId: linkQuestionMovement(q.prompt || q.question, Number.isInteger(q.movementIndex) ? q.movementIndex : null, movs) })).filter(q => q.prompt),
+    aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), observationDraft: String(q.observation || '').slice(0, 600), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null, movementId: linkQuestionMovement(q.prompt || q.question, Number.isInteger(q.movementIndex) ? q.movementIndex : null, movs) })).filter(q => q.prompt),
     notes: Array.isArray(raw?.notes) ? raw.notes.map(normalizeNote).filter(n => n.detail) : [],
     delinquency: normalizeDelinquency(raw?.delinquency, period) || { found: false, asOf: null, reportedTotal: null, rows: [] },
   });
 }
+
+// ---------- Rol de quien hace la revisión ----------
+const ROLES = {
+  condomino: { label: 'Condómino', reviewer: 'Condómino revisor', desc: 'Revisas el estado de cuenta que entrega la administración y le haces observaciones.', note: 'Escrito de observaciones a la administración', questions: 'Preguntas a la administración', obsPanel: 'Observaciones para la administración', obsAction: 'Enviar como observación a la administración' },
+  comite: { label: 'Miembro del Comité de Vigilancia', reviewer: 'Miembro del Comité de Vigilancia', desc: 'Vigilas la gestión de la administración y detectas inconsistencias para el Comité.', note: 'Nota de alerta para el Comité de Vigilancia', questions: 'Preguntas para el administrador en la próxima reunión', obsPanel: 'Observaciones para la administración', obsAction: 'Enviar como observación a la administración' },
+  admin: { label: 'Administrador', reviewer: 'Administrador', desc: 'Revisas tu propio estado de cuenta antes de presentarlo al Comité y a la Asamblea.', note: 'Puntos a corregir antes de presentar el estado de cuenta', questions: 'Puntos a verificar con soporte documental', obsPanel: 'Puntos pendientes anotados', obsAction: 'Dejar pendiente (anotar)' },
+};
+const roleOf = r => ROLES[r] || ROLES.condomino;
 
 // Observaciones de lectura de Claude: {kind, title, detail}. Acepta también texto suelto (versiones anteriores).
 const NOTE_KINDS = {
@@ -1117,7 +1160,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, ROLES, roleOf, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1238,7 +1281,7 @@ Reglas:
   Agrega solo cuando aplique: scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
 - Departamento de cada renglón: puede aparecer como columna propia (Depto, Unidad, Condómino, Referencia), como encabezado de grupo ("TORRE 4", "EDIFICIO B") que aplica a los renglones de abajo, o dentro de la referencia del depósito. Llévalo a origin y conserva en concept el texto del renglón tal como está (no lo resumas). Un movimiento por renglón del documento: no repitas renglones ni inventes renglones que no existen.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
-- questions: preguntas concretas [{prompt, blocking, movementIndex}] (movementIndex = posición, desde 0, del movimiento en tu lista movements; menciona en prompt su fecha y monto) sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
+- questions: preguntas concretas [{prompt, blocking, movementIndex, observation}] (movementIndex = posición, desde 0, del movimiento en tu lista movements; menciona en prompt su fecha y monto). observation: la misma duda redactada como solicitud formal, breve y neutral a la administración (p. ej. "Se solicita a la administración aclarar a qué cuotas se aplica el ingreso de $20,000.00 del 05/04/2026 (Torre 3 - 402)."); no supongas la respuesta sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
 ${p.previous ? `\nAclaraciones del usuario que debes aplicar:\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}\nMapeo anterior, SOLO como referencia para entender las aclaraciones. Vuelve a leer cada movimiento directamente de las páginas: no copies filas del mapeo anterior sin verificarlas, no repitas movimientos y corrige conceptos que hayan perdido el departamento:\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}` : ''}
@@ -1285,6 +1328,8 @@ ${wrap('indicadores_motor', JSON.stringify(p.indicators))}
 ${wrap('candidatos_motor', JSON.stringify(p.anomalies))}
 ${wrap('movimientos_confirmados', JSON.stringify(p.movements))}
 ${wrap('morosidad_por_departamento', JSON.stringify(p.delinquency || []))}
+${wrap('observaciones_para_la_administracion', JSON.stringify(p.observations || []))}
+- Las observaciones son dudas que el revisor no pudo resolver con el estado de cuenta y envió a la administración; trátalas como pendientes de aclarar, no como hechos.
 - La morosidad por departamento viene del reporte de morosidad del estado de cuenta. Analízala: concentración del adeudo, departamentos con adeudo antiguo (3 meses o más), altas y bajas entre meses y su relación con los ingresos ordinarios. Un hallazgo de morosidad puede citar en evidence los ids de filas de morosidad (terminan en -Dnnn) además de movimientos.
 
 Formato: {"executiveSummary":"","facts":[{"text":"","source":"motor"}],"interpretation":["..."],"hypotheses":[{"text":"","quantified":false}],"alerts":{"delinquency":"","atypicalExpenses":"","committedBalances":""},"comparabilityNote":"","findings":[{"id":"H1","title":"","facts":["hecho verificable con cifra"],"interpretation":"","description":"resumen de una oración","evidence":["id-mov"],"category":"ID_CATEGORIA","level":"critical","kind":"arithmetic_error","impact":"","recommendation":"","missingData":"","hypotheses":[{"text":"","quantified":false}],"sourceRule":"R01 o null"}]}`;
@@ -1304,18 +1349,33 @@ Formato: {"executiveSummary":"","flowAnalysis":"","expenseAnalysis":"","fundsAna
 }
 
 function alertPrompt(p) {
-  return `OPERACIÓN: alert.
-Asume el rol de asesor financiero externo del condominio. Redacta una nota formal al Comité de Vigilancia que señale los riesgos identificados, exija acciones concretas con plazos sugeridos y advierta sobre las consecuencias de no atender los hallazgos críticos. Sustenta cada argumento en los datos confirmados; no inventes deterioro si los datos muestran normalidad.
-- addressee: "Comité de Vigilancia del ${p.condo?.name || 'condominio'}"; sender: "Análisis IA"; reference: nombre del condominio y período (${p.period}); date: ${p.date}.
-- findings: los ${p.findings.length} hallazgo(s) confirmado(s), todos y en el orden dado, con sus ids exactos: [{id, title, level, risk, requiredAction, suggestedDeadline}].
+  const name = p.condo?.name || 'condominio';
+  const law = 'artículo 39 de la Ley de Propiedad en Condominio de Inmuebles para el Distrito Federal (LPCIDF)';
+  const byRole = {
+    comite: `Asume el rol de asesor financiero externo del condominio. Redacta una nota formal al Comité de Vigilancia que señale los riesgos identificados, exija acciones concretas con plazos sugeridos y advierta sobre las consecuencias de no atender los hallazgos críticos.
+- addressee: "Comité de Vigilancia del ${name}"; sender: "Análisis IA".
 - questionsForCommittee: exactamente tres preguntas accionables y específicas que el Comité debe formular al administrador en la próxima reunión.
-- body: cuerpo de la nota en párrafos (texto completo).
-- legalWarning: cierre que advierta que los hallazgos Críticos no atendidos en el próximo mes deben escalarse a la Asamblea General de Condóminos conforme al artículo 39 de la Ley de Propiedad en Condominio de Inmuebles para el Distrito Federal (LPCIDF).
+- legalWarning: cierre que advierta que los hallazgos Críticos no atendidos en el próximo mes deben escalarse a la Asamblea General de Condóminos conforme al ${law}.`,
+    condomino: `Redacta, a nombre de un condómino que revisó el estado de cuenta, un escrito formal y respetuoso dirigido a la administración, con copia al Comité de Vigilancia. Expón los hallazgos con sus cifras, solicita las aclaraciones y la documentación soporte con plazos sugeridos, e incluye en el cuerpo todas las observaciones para la administración. No acuses ni atribuyas intención: solicita información.
+- addressee: "Administración del ${name} (c.c. Comité de Vigilancia)"; sender: "${p.reviewer || 'Condómino revisor'}, condómino (redacción asistida por Análisis IA)".
+- questionsForCommittee: exactamente tres preguntas concretas que se solicita responder a la administración.
+- legalWarning: cierre que indique que, si los hallazgos Críticos no se atienden en el próximo mes, se solicitará al Comité de Vigilancia escalarlos a la Asamblea General de Condóminos conforme al ${law}.`,
+    admin: `Redacta, para la propia administración, una lista de autorrevisión: puntos a corregir o documentar antes de presentar el estado de cuenta al Comité de Vigilancia y a la Asamblea, con la acción correctiva y un plazo sugerido para cada hallazgo, e incluye los puntos pendientes anotados.
+- addressee: "Administración del ${name} (autorrevisión)"; sender: "Análisis IA".
+- questionsForCommittee: exactamente tres puntos que la administración debe verificar con soporte documental antes de presentar el estado de cuenta.
+- legalWarning: recordatorio de que los hallazgos Críticos que no se corrijan deberán informarse a la Asamblea General de Condóminos conforme al ${law}.`,
+  };
+  return `OPERACIÓN: alert.
+${byRole[p.role] || byRole.condomino}
+- reference: nombre del condominio y período (${p.period}); date: ${p.date}.
+- findings: los ${p.findings.length} hallazgo(s) confirmado(s), todos y en el orden dado, con sus ids exactos: [{id, title, level, risk, requiredAction, suggestedDeadline}].
+- body: cuerpo en párrafos (texto completo), con tono profesional y argumentos sustentados en los datos confirmados. No inventes deterioro si los datos muestran normalidad.
 ${wrap('reporte_aprobado', JSON.stringify(p.report))}
 ${wrap('hallazgos_confirmados', JSON.stringify(p.findings))}
+${wrap('observaciones_para_la_administracion', JSON.stringify(p.observations || []))}
 ${wrap('indicadores_motor', JSON.stringify(p.indicators))}
 
-Formato: {"addressee":"","sender":"Análisis IA","reference":"","date":"","body":"","findings":[],"questionsForCommittee":["","",""],"legalWarning":""}`;
+Formato: {"addressee":"","sender":"","reference":"","date":"","body":"","findings":[],"questionsForCommittee":["","",""],"legalWarning":""}`;
 }
 
 function buildPrompt(op, payload) {
@@ -1384,7 +1444,7 @@ return { AI_OPS, COMMON_INSTRUCTION, buildPrompt, MAX_TOKENS, parseJsonText, val
 
 const __m_report_mjs = (() => {
 // Renderizado del reporte (vista previa y HTML descargable) y gráficos SVG.
-const { fmtMXN, LEVEL_LABEL, catLabel } = __m_condominio_mjs;
+const { fmtMXN, LEVEL_LABEL, catLabel, roleOf } = __m_condominio_mjs;
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const para = s => String(s || '').split(/\n{2,}|\n/).filter(x => x.trim()).map(x => `<p>${esc(x)}</p>`).join('');
@@ -1544,6 +1604,7 @@ function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   ${para(R.delinquencyAnalysis)}
   <h2>Hallazgos prioritarios</h2>${findings}
   ${S.report?.observations ? `<h2>Observaciones del revisor <span class="src user">Usuario</span></h2>${para(S.report.observations)}` : ''}
+  ${observationsSection(S)}
   <h2>Limitaciones del análisis</h2>${para(R.limitations)}
   ${rv?.approvedAt ? `<div class="approval"><b>Revisión humana:</b> aprobado por ${esc(rv.reviewer)} (${esc(rv.role)}) el ${esc(new Date(rv.approvedAt).toLocaleString('es-MX'))}. Confirmó cifras y cuadre, evidencia de hallazgos y coherencia de recomendaciones. Esta aprobación no es firma electrónica ni acta de Asamblea.</div>` : ''}
   ${includeNote && note ? alertBody(note, S) : ''}`;
@@ -1560,17 +1621,24 @@ function delinquencySection(ind) {
   <p class="muted">Filas resaltadas: adeudo de 3 meses o más en el último corte. Índice de morosidad = adeudo total ÷ ingresos ordinarios anualizados × 100.</p>`;
 }
 
+function observationsSection(S) {
+  const obs = Object.values(S.qActions || {}).filter(a => a.action === 'observation');
+  if (!obs.length) return '';
+  return `<h2>${esc(roleOf(S.role).obsPanel)} <span class="src user">Usuario</span></h2><ol>${obs.map(o => `<li>[${esc(o.period)}] ${esc(o.text)}</li>`).join('')}</ol>`;
+}
+
 function alertBody(n, S) {
-  return `<h2>Nota de alerta para el Comité de Vigilancia <span class="src ia">IA</span></h2>
+  const r = roleOf(S.role);
+  return `<h2>${esc(r.note)} <span class="src ia">IA</span></h2>
   <div class="note">
     <p><b>Para:</b> ${esc(n.addressee)}<br><b>De:</b> ${esc(n.sender)}<br><b>Referencia:</b> ${esc(n.reference)}<br><b>Fecha:</b> ${esc(n.date)}</p>
     ${para(n.body)}
     <h3>Hallazgos por orden de urgencia</h3>
     <ol>${(n.findings || []).map(f => `<li><b>${esc(f.title)}</b> <span class="pill ${esc((S.selection.find(s => s.id === f.id) || {}).level || f.level)}">${LEVEL_LABEL[(S.selection.find(s => s.id === f.id) || {}).level || f.level] || ''}</span><br>${esc(f.risk || '')}${f.requiredAction ? `<br><b>Acción requerida:</b> ${esc(f.requiredAction)}` : ''}${f.suggestedDeadline ? ` <b>Plazo sugerido:</b> ${esc(f.suggestedDeadline)}` : ''}</li>`).join('')}</ol>
-    <h3>Preguntas para el administrador en la próxima reunión</h3>
+    <h3>${esc(r.questions)}</h3>
     <ol>${(n.questionsForCommittee || []).map(q => `<li>${esc(q)}</li>`).join('')}</ol>
     ${para(n.legalWarning)}
-    <p class="muted">Instrumento de apoyo interno. No se envía automáticamente ni ejecuta acciones externas.</p>
+    <p class="muted">Documento de apoyo redactado con asistencia de IA. No se envía automáticamente ni ejecuta acciones externas.</p>
   </div>`;
 }
 
@@ -1621,6 +1689,7 @@ function fresh() {
     schema: SCHEMA, version: 1, caseId: uid(), createdAt: now(), stage: 1,
     condo: { ...CONDO },
     consent: false,
+    role: 'condomino', qActions: {},
     files: [], months: [], fundOpenings: {},
     meta: { bank: '', accountType: '', currency: 'MXN' },
     answers: {}, appliedAnswers: {}, corrections: [],
@@ -1688,8 +1757,17 @@ function questions() {
   const ms = months();
   const eq = E.engineQuestions(ms);
   const aiq = ms.flatMap(m => m.aiQuestions || []).filter(q => !S.appliedAnswers[q.id]);
-  return [...eq, ...aiq];
+  return [...eq, ...aiq].filter(q => !isHandled(q));
 }
+// Una aclaración queda atendida si se envió como observación o se marcó como no relevante
+// (se compara el texto: al releer un mes, una pregunta nueva puede reusar el mismo id).
+const isHandled = q => { const a = S.qActions?.[q.id]; return !!a && (a.prompt === q.prompt || q.kind !== 'text'); };
+function observations() {
+  return Object.entries(S.qActions || {}).filter(([, a]) => a.action === 'observation').map(([qid, a]) => ({ qid, ...a })).sort((a, b) => String(a.period).localeCompare(String(b.period)) || String(a.at).localeCompare(String(b.at)));
+}
+const dismissed = () => Object.entries(S.qActions || {}).filter(([, a]) => a.action === 'dismiss');
+const R = () => E.roleOf(S.role);
+const answerOpen = new Set();
 const pendingTextAnswers = () => questions().filter(q => q.kind === 'text' && (S.answers[q.id] || '').trim());
 const blockingOpen = () => questions().filter(q => q.blocking && !(q.kind === 'text' && (S.answers[q.id] || '').trim()));
 function indicators() { return E.computeIndicators(months(), S.condo, S.fundOpenings); }
@@ -2127,11 +2205,11 @@ async function runAnalyze() {
   errors.analyze = null;
   const ms = months();
   const ind = indicators();
-  const anomalies = E.detectAnomalies(ms, ind);
+  const anomalies = E.detectAnomalies(ms, ind, { observations: observations() });
   const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, origin: m.origin || undefined, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
   try {
     const delinquency = E.delinquencyRows(ms).map(r => ({ id: r.id, period: r.period, unit: r.unit, amount: r.amount, months: r.months }));
-    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency }, 'analyze');
+    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency, observations: observations().map(o => ({ movementId: o.movementId, period: o.period, text: o.text })) }, 'analyze');
     S.diagnosis = { at: now(), hash: mappingHash(), indicators: ind, anomalies, ai };
     invalidate('selection'); S.selection = [];
     log('diagnóstico', `${ai.findings.length} hallazgos propuestos; ${anomalies.length} reglas disparadas`);
@@ -2172,7 +2250,7 @@ async function runAlert() {
   errors.alert = null;
   const ind = indicators();
   try {
-    const ai = await callAI('alert', { condo: condoForAI(), period: ind.periodFrom === ind.periodTo ? ind.periodFrom : `${ind.periodFrom} a ${ind.periodTo}`, date: new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' }), report: S.report.ai, findings: selectedFindings(), indicators: { months: ind.months, committedFunds: ind.committedFunds, freeBalance: ind.freeBalance, bankBalance: ind.bankBalance } }, 'alert');
+    const ai = await callAI('alert', { role: S.role, reviewer: S.review?.reviewer, observations: observations().map(o => ({ period: o.period, text: o.text })), condo: condoForAI(), period: ind.periodFrom === ind.periodTo ? ind.periodFrom : `${ind.periodFrom} a ${ind.periodTo}`, date: new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' }), report: S.report.ai, findings: selectedFindings(), indicators: { months: ind.months, committedFunds: ind.committedFunds, freeBalance: ind.freeBalance, bankBalance: ind.bankBalance } }, 'alert');
     S.alert = { at: now(), ai, acceptedAt: null };
     log('nota_alerta', 'Nota de alerta generada');
   } catch (e) { errors.alert = errorText(e.code, e.message); log('error_ia', `alert: ${e.code || ''} ${e.message}`); }
@@ -2316,6 +2394,10 @@ function stage1() {
   const newFiles = S.files.filter(f => f.status === 'extraído' && !S.months.some(m => m.fileId === f.id));
   const canRun = S.consent && aiReady() && newFiles.length;
   return `${head(1, 'Estados de cuenta del mes', 'Carga de uno a doce estados de cuenta mensuales en PDF, con texto o escaneados. El texto se extrae en este navegador y las páginas escaneadas se envían como imagen; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
+  <section class="panel"><h2>¿Quién hace esta revisión?</h2>
+    <p class="lead">El rol define qué puedes hacer con cada aclaración y a quién va dirigida la nota final. Puedes cambiarlo después.</p>
+    <div class="roles" role="radiogroup" aria-label="Rol de quien revisa">${Object.entries(E.ROLES).map(([k, r]) => `<label class="role-card ${S.role === k ? 'on' : ''}"><input type="radio" name="role" id="role-${k}" data-role="${k}" ${S.role === k ? 'checked' : ''}><span class="rc-t">${esc(r.label)}</span><span class="rc-d">${esc(r.desc)}</span><span class="rc-n">Nota final: ${esc(r.note)}</span></label>`).join('')}</div>
+  </section>
   ${S.months.length ? `<div class="banner warn"><span>Este análisis ya contiene ${S.months.length} mes${S.months.length === 1 ? '' : 'es'} interpretado${S.months.length === 1 ? '' : 's'} (${E.sortMonths(S.months).map(m => esc(m.period)).join(', ')}) de cargas anteriores, guardados en este navegador. Los PDFs nuevos se agregan a ellos. Si quieres analizar solo un estado de cuenta, usa «Interrumpir y comenzar nuevo análisis» al final de esta pantalla.</span></div>` : ''}
   <section class="panel"><h2>Estados de cuenta (PDF)</h2>
     <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto, escaneado o mixto: las páginas escaneadas se leen como imagen</span></div>
@@ -2372,8 +2454,10 @@ function stage2() {
     ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
+    <p class="lead">${S.role === 'admin' ? 'Responde las que puedas con tu documentación; deja anotadas las que requieran revisión posterior.' : 'Tú solo tienes el estado de cuenta: envía cada duda como observación a la administración (puedes editar la redacción sugerida) o respóndela si tienes la información.'}</p>
     ${qs.length ? qs.map(q => questionView(q, catOpts)).join('') : '<p>No hay preguntas pendientes.</p>'}
   </section>
+  ${observationsPanel()}
   <section class="panel"><div class="row" style="justify-content:space-between"><h2>Confirmación</h2><div class="row">
       <button class="btn sm" data-act="check-all" ${dis(allChecked)}>Seleccionar todo</button>
       <button class="btn sm ghost" data-act="check-none" ${dis(!Object.values(checks).some(Boolean))}>Deseleccionar todo</button></div></div>
@@ -2390,6 +2474,7 @@ function stage2() {
 }
 
 function monthCard(m, catOpts) {
+  const obsIds = new Set(observations().map(o => o.movementId).filter(Boolean));
   const oopIds = new Set(m.outOfPeriodDecision === 'keep' ? [] : E.outOfPeriod(m).map(x => x.id));
   const movs = [...m.movements, ...m.unclassifiedMovements].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const file = S.files.find(f => f.id === m.fileId);
@@ -2413,7 +2498,7 @@ function monthCard(m, catOpts) {
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th class="n">No.</th><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}${obsIds.has(x.id) ? ' <span class="pill moderate" title="Enviado como observación a la administración">Sin aclarar</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -2471,20 +2556,38 @@ function questionMovement(q) {
 
 function questionView(q, catOpts) {
   const mv = questionMovement(q);
-  let input = '';
-  if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
-  else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
-  else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
-  else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
-  else if (q.kind === 'origin') input = '';
-  else input = `<textarea id="qa-${esc(q.id)}" data-qtext="${esc(q.id)}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
-  return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${esc(q.id)}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${input}</div>`;
+  const id = esc(q.id);
+  let answer = '';
+  if (q.kind === 'category') answer = `<select id="qa-${id}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
+  else if (q.kind === 'amount') answer = `<input type="number" step="0.01" min="0" id="qa-${id}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'balance') answer = `<input type="number" step="0.01" id="qa-${id}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'origin') answer = '<p class="muted">Captura el origen de cada abono en la columna «Origen» de la tabla.</p>';
+  else answer = `<textarea id="qa-${id}" data-qtext="${id}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
+  const draft = q.observationDraft || `Se solicita a la administración aclarar lo siguiente: ${q.prompt}`;
+  let body;
+  if (q.kind === 'outofperiod') body = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
+  else if (S.role === 'admin') body = `${answer}<div class="row q-actions"><button class="btn sm" data-act="q-obs" data-q="${id}" ${dis()}>${esc(R().obsAction)}</button><button class="btn sm ghost" data-act="q-dismiss" data-q="${id}" ${dis()}>No es relevante</button></div><input type="hidden" id="obs-${id}" value="${esc(draft)}">`;
+  else body = `<label class="f obs-draft">Observación sugerida para la administración ${q.kind === 'text' ? src('ia') : src('motor')}<textarea id="obs-${id}" rows="2">${esc(draft)}</textarea></label>
+    <div class="row q-actions"><button class="btn sm primary" data-act="q-obs" data-q="${id}" ${dis()}>${esc(R().obsAction)}</button><button class="btn sm" data-act="q-answer" data-q="${id}" ${dis()}>${answerOpen.has(q.id) ? 'Ocultar respuesta' : 'Tengo la respuesta'}</button><button class="btn sm ghost" data-act="q-dismiss" data-q="${id}" ${dis()}>No es relevante</button></div>
+    ${answerOpen.has(q.id) || (q.kind === 'text' && (S.answers[q.id] || '').trim()) ? `<div class="q-answer">${answer}</div>` : ''}`;
+  return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${id}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${body}</div>`;
+}
+
+// Observaciones enviadas a la administración (o puntos pendientes del administrador).
+function observationsPanel() {
+  const obs = observations();
+  const dis_ = dismissed();
+  if (!obs.length && !dis_.length) return '';
+  return `<section class="panel" id="observations"><div class="row" style="justify-content:space-between"><h2>${esc(R().obsPanel)} (${obs.length}) ${src('user')}</h2>${obs.length ? `<button class="btn sm" data-act="obs-copy">Copiar lista</button>` : ''}</div>
+    ${obs.length ? `<ol class="obs-list">${obs.map(o => `<li><div class="row"><span class="pill neutral">${esc(o.period)}</span>${o.blocking ? '<span class="pill critical">Era bloqueante</span>' : ''}${o.movementId ? `<a href="#mv-${esc(o.movementId)}" data-scroll="mv-${esc(o.movementId)}">ver movimiento</a>` : ''}<button class="btn sm ghost" data-act="obs-remove" data-q="${esc(o.qid)}">Quitar</button></div><textarea id="obst-${esc(o.qid)}" data-obstext="${esc(o.qid)}" rows="2">${esc(o.text)}</textarea></li>`).join('')}</ol>` : ''}
+    ${dis_.length ? `<p class="muted">${dis_.length} aclaración(es) marcadas como no relevantes. <button class="btn sm ghost" data-act="dismiss-restore">Restaurarlas</button></p>` : ''}
+    <span class="status" id="obs-copy-status"></span></section>`;
 }
 
 // ----- Etapa 3 -----
 function stage3() {
   const ind = S.diagnosis?.indicators || indicators();
-  const an = S.diagnosis?.anomalies || E.detectAnomalies(months(), ind);
+  const an = S.diagnosis?.anomalies || E.detectAnomalies(months(), ind, { observations: observations() });
   const ai = S.diagnosis?.ai;
   const stale = S.diagnosis && S.diagnosis.hash !== mappingHash();
   return `${head(3, 'Diagnóstico', 'El motor calcula flujo, variaciones, composición de egresos, fondos comprometidos y recaudación; Claude interpreta esos resultados y propone hallazgos.')}
@@ -2616,7 +2719,7 @@ function stage6() {
     <label class="check"><input type="checkbox" id="rv-b" data-rv="b" ${d.b ? 'checked' : ''}><span>(b) Verifiqué la evidencia de cada hallazgo frente a los movimientos.</span></label>
     <label class="check"><input type="checkbox" id="rv-c" data-rv="c" ${d.c ? 'checked' : ''}><span>(c) Las recomendaciones son coherentes con la situación del condominio.</span></label>
     <div class="grid2"><label class="f">Nombre del revisor<input type="text" id="rv-name" data-rvname="1" value="${esc(d.reviewer)}" maxlength="120"></label>
-    <label class="f">Función<select id="rv-role" data-rvrole="1">${['Administrador', 'Miembro del Comité de Vigilancia', 'Condómino revisor'].map(o => `<option ${o === d.role ? 'selected' : ''}>${o}</option>`).join('')}</select></label></div>
+    <div class="kpi"><span class="l">Función (elegida en la etapa 1)</span><span class="v" style="font-family:var(--f-body);font-size:15px">${esc(R().reviewer)}</span></div></div>
     <p style="font-size:12.5px;color:var(--ink-3)">Esta aprobación queda registrada con fecha y hora. No es firma electrónica ni acta de Asamblea.</p>`}
     <div class="actionbar">
       ${rv?.approvedAt ? (S.alert ? '<button class="btn primary" data-go="7">Ver nota de alerta</button>' : `<button class="btn primary" data-act="alert" ${dis()}>Generar nota de alerta</button>`) : `<button class="btn primary" data-act="approve" ${dis(!ok)}>Aprobar reporte</button>`}
@@ -2642,7 +2745,7 @@ function refreshReviewControls() {
 // ----- Etapa 7 -----
 function stage7() {
   const a = S.alert;
-  return `${head(7, 'Nota de alerta para el Comité de Vigilancia', 'Comprueba que la nota sea coherente con el reporte aprobado. Es un instrumento de apoyo interno: no se envía a nadie automáticamente.')}
+  return `${head(7, esc(R().note), 'Comprueba que el documento sea coherente con el reporte aprobado. Es un instrumento de apoyo: no se envía a nadie automáticamente.')}
   ${a ? `<section class="panel doc-lite"><div class="doc" style="padding:22px">${alertBody(a.ai, S).replace('<h2>', '<h2 style="color:#0b1628">')}</div></section>` : `<section class="panel"><p>La nota aún no se ha generado.</p></section>`}
   <div class="actionbar">
     ${a ? (a.acceptedAt ? `<span class="pill ok">Nota aceptada ${esc(new Date(a.acceptedAt).toLocaleString('es-MX'))}</span><button class="btn primary" data-go="8">Ir a entrega</button>` : `<button class="btn primary" data-act="accept-alert" ${dis()}>Aceptar nota</button>`) : ''}
@@ -2745,6 +2848,24 @@ document.addEventListener('click', async e => {
       }
       invalidate('confirmation'); S.confirmation = null; save(); return render();
     }
+    case 'q-obs': case 'q-dismiss': {
+      const q = [...E.engineQuestions(months()), ...months().flatMap(m => m.aiQuestions || [])].find(x => x.id === t.dataset.q);
+      if (!q) return;
+      const text = (document.getElementById('obs-' + q.id)?.value || q.observationDraft || q.prompt).trim();
+      S.qActions[q.id] = { action: act === 'q-obs' ? 'observation' : 'dismiss', text, prompt: q.prompt, period: q.period, kind: q.kind, blocking: !!q.blocking, movementId: questionMovement(q)?.id || q.movementId || null, at: now() };
+      log(act === 'q-obs' ? 'observación' : 'aclaración_descartada', `${q.period}: ${act === 'q-obs' ? text : q.prompt}`.slice(0, 280));
+      invalidate('confirmation'); S.confirmation = null; save(); return render();
+    }
+    case 'q-answer': { answerOpen.has(t.dataset.q) ? answerOpen.delete(t.dataset.q) : answerOpen.add(t.dataset.q); return render(); }
+    case 'obs-remove': { delete S.qActions[t.dataset.q]; log('observación', 'Observación retirada; la aclaración vuelve a pendientes'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
+    case 'dismiss-restore': { for (const [k] of dismissed()) delete S.qActions[k]; log('aclaración_descartada', 'Aclaraciones restauradas'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
+    case 'obs-copy': {
+      const txt = `${R().obsPanel} — ${CONDO.name}\n\n` + observations().map((o, i) => `${i + 1}. [${o.period}] ${o.text}`).join('\n');
+      const st = document.getElementById('obs-copy-status');
+      try { await navigator.clipboard.writeText(txt); if (st) st.textContent = 'Lista copiada.'; }
+      catch { if (st) { st.textContent = ''; const ta = document.createElement('textarea'); ta.value = txt; ta.rows = 6; ta.style.width = '100%'; st.replaceWith(ta); ta.select(); } }
+      return;
+    }
     case 'reread': { log('relectura', 'Volver a leer el mes para incorporar la morosidad'); await runInterpret([t.dataset.file]); S._checks = {}; save(); return render(); }
     case 'interpret': { const ok = await runInterpret(); if (ok && S.months.length) go(2); return; }
     case 'apply-answers': {
@@ -2787,7 +2908,7 @@ document.addEventListener('click', async e => {
     case 'approve': {
       const d = S._review;
       if (!(d.reviewer.trim() && d.a && d.b && d.c)) return;
-      S.review = { reviewer: d.reviewer.trim(), role: d.role, checks: { a: true, b: true, c: true }, approvedAt: now() };
+      S.review = { reviewer: d.reviewer.trim(), role: R().reviewer, roleKey: S.role, checks: { a: true, b: true, c: true }, approvedAt: now() };
       log('aprobación', `${S.review.reviewer} (${S.review.role})`); save(); render();
       await runAlert();
       if (S.alert) go(7);
@@ -2812,6 +2933,7 @@ document.addEventListener('input', e => {
     save();
   }
   if (t.dataset.qtext) { S.answers[t.dataset.qtext] = t.value; save(); }
+  if (t.dataset.obstext && S.qActions[t.dataset.obstext]) { S.qActions[t.dataset.obstext].text = t.value; save(); }
   if (t.dataset.rvname) { S._review.reviewer = t.value; save(); refreshReviewControls(); }
 });
 
@@ -2821,6 +2943,12 @@ document.addEventListener('change', e => {
   if (t.id === 'json-in' && t.files[0]) {
     t.files[0].text().then(restoreJSON).then(() => { errors.restore = null; }).catch(err => { errors.restore = err.message; render(); });
     t.value = ''; return;
+  }
+  if (t.dataset.role) {
+    S.role = t.dataset.role;
+    log('rol', E.roleOf(S.role).label);
+    if (S.review || S.alert) invalidate('review');
+    save(); return render();
   }
   if (t.dataset.bindCheck) { S[t.dataset.bindCheck] = t.checked; log(t.dataset.bindCheck, t.checked ? 'otorgado' : 'retirado'); save(); return render(); }
   if (t.dataset.bind === 'observationsDraft' || t.dataset.bind?.startsWith('meta.')) { if (t.dataset.bind.startsWith('meta.') && confirmed()) { S.confirmation = null; invalidate('confirmation'); } save(); return render(); }

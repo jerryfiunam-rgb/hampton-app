@@ -211,6 +211,26 @@ test('cada pregunta de Claude se liga a su movimiento', () => {
   assert.equal(E.linkQuestionMovement('¿El estado incluye otra cuenta de inversión?', null, movs), null);
 });
 
+test('observaciones: redacción sugerida y movimiento sin aclarar como hallazgo', () => {
+  const x = mv('s1', '2026-04-08', 'SPEI 4471 PROV XYZ', 3800, 'cargo', 'NO_CLASIFICADO');
+  const m = month('2026-04', 10000, 6200, [x]);
+  const q = E.engineQuestions([m]).find(k => k.kind === 'category');
+  assert.match(q.observationDraft, /^Se solicita a la administración aclarar el concepto y destino del cargo «SPEI 4471 PROV XYZ» del 2026-04-08 por \$3,800\.00/);
+  const an = E.detectAnomalies([m], null, { observations: [{ movementId: 's1', text: 'Se solicita el comprobante.', blocking: true }] });
+  const r = an.find(a => a.rule === 'sin_aclarar');
+  assert.ok(r && r.level === 'critical' && r.evidence[0] === 's1' && /comprobante/.test(r.detail));
+});
+
+test('la nota se adapta al rol de quien revisa', () => {
+  const base = { condo: { name: 'Condominio Hampton Court' }, period: '2026-04', date: 'hoy', report: {}, findings: [{ id: 'H1' }], indicators: {}, observations: [{ period: '2026-04', text: 'Obs 1' }] };
+  const p = r => buildPrompt('alert', { ...base, role: r, reviewer: 'Ana' }).user;
+  assert.match(p('comite'), /nota formal al Comité de Vigilancia/);
+  assert.match(p('condomino'), /c\.c\. Comité de Vigilancia/); assert.match(p('condomino'), /Ana, condómino/);
+  assert.match(p('admin'), /autorrevisión/);
+  for (const r of ['comite', 'condomino', 'admin']) { assert.match(p(r), /artículo 39/); assert.match(p(r), /Obs 1/); }
+  assert.equal(E.roleOf('x').label, 'Condómino');
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

@@ -37,6 +37,7 @@ function fresh() {
     schema: SCHEMA, version: 1, caseId: uid(), createdAt: now(), stage: 1,
     condo: { ...CONDO },
     consent: false,
+    role: 'condomino', qActions: {},
     files: [], months: [], fundOpenings: {},
     meta: { bank: '', accountType: '', currency: 'MXN' },
     answers: {}, appliedAnswers: {}, corrections: [],
@@ -104,8 +105,17 @@ function questions() {
   const ms = months();
   const eq = E.engineQuestions(ms);
   const aiq = ms.flatMap(m => m.aiQuestions || []).filter(q => !S.appliedAnswers[q.id]);
-  return [...eq, ...aiq];
+  return [...eq, ...aiq].filter(q => !isHandled(q));
 }
+// Una aclaración queda atendida si se envió como observación o se marcó como no relevante
+// (se compara el texto: al releer un mes, una pregunta nueva puede reusar el mismo id).
+const isHandled = q => { const a = S.qActions?.[q.id]; return !!a && (a.prompt === q.prompt || q.kind !== 'text'); };
+function observations() {
+  return Object.entries(S.qActions || {}).filter(([, a]) => a.action === 'observation').map(([qid, a]) => ({ qid, ...a })).sort((a, b) => String(a.period).localeCompare(String(b.period)) || String(a.at).localeCompare(String(b.at)));
+}
+const dismissed = () => Object.entries(S.qActions || {}).filter(([, a]) => a.action === 'dismiss');
+const R = () => E.roleOf(S.role);
+const answerOpen = new Set();
 const pendingTextAnswers = () => questions().filter(q => q.kind === 'text' && (S.answers[q.id] || '').trim());
 const blockingOpen = () => questions().filter(q => q.blocking && !(q.kind === 'text' && (S.answers[q.id] || '').trim()));
 function indicators() { return E.computeIndicators(months(), S.condo, S.fundOpenings); }
@@ -543,11 +553,11 @@ async function runAnalyze() {
   errors.analyze = null;
   const ms = months();
   const ind = indicators();
-  const anomalies = E.detectAnomalies(ms, ind);
+  const anomalies = E.detectAnomalies(ms, ind, { observations: observations() });
   const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, origin: m.origin || undefined, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
   try {
     const delinquency = E.delinquencyRows(ms).map(r => ({ id: r.id, period: r.period, unit: r.unit, amount: r.amount, months: r.months }));
-    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency }, 'analyze');
+    const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency, observations: observations().map(o => ({ movementId: o.movementId, period: o.period, text: o.text })) }, 'analyze');
     S.diagnosis = { at: now(), hash: mappingHash(), indicators: ind, anomalies, ai };
     invalidate('selection'); S.selection = [];
     log('diagnóstico', `${ai.findings.length} hallazgos propuestos; ${anomalies.length} reglas disparadas`);
@@ -588,7 +598,7 @@ async function runAlert() {
   errors.alert = null;
   const ind = indicators();
   try {
-    const ai = await callAI('alert', { condo: condoForAI(), period: ind.periodFrom === ind.periodTo ? ind.periodFrom : `${ind.periodFrom} a ${ind.periodTo}`, date: new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' }), report: S.report.ai, findings: selectedFindings(), indicators: { months: ind.months, committedFunds: ind.committedFunds, freeBalance: ind.freeBalance, bankBalance: ind.bankBalance } }, 'alert');
+    const ai = await callAI('alert', { role: S.role, reviewer: S.review?.reviewer, observations: observations().map(o => ({ period: o.period, text: o.text })), condo: condoForAI(), period: ind.periodFrom === ind.periodTo ? ind.periodFrom : `${ind.periodFrom} a ${ind.periodTo}`, date: new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' }), report: S.report.ai, findings: selectedFindings(), indicators: { months: ind.months, committedFunds: ind.committedFunds, freeBalance: ind.freeBalance, bankBalance: ind.bankBalance } }, 'alert');
     S.alert = { at: now(), ai, acceptedAt: null };
     log('nota_alerta', 'Nota de alerta generada');
   } catch (e) { errors.alert = errorText(e.code, e.message); log('error_ia', `alert: ${e.code || ''} ${e.message}`); }
@@ -732,6 +742,10 @@ function stage1() {
   const newFiles = S.files.filter(f => f.status === 'extraído' && !S.months.some(m => m.fileId === f.id));
   const canRun = S.consent && aiReady() && newFiles.length;
   return `${head(1, 'Estados de cuenta del mes', 'Carga de uno a doce estados de cuenta mensuales en PDF, con texto o escaneados. El texto se extrae en este navegador y las páginas escaneadas se envían como imagen; con tu autorización, Claude identifica saldos y movimientos y el motor verifica el cuadre.')}
+  <section class="panel"><h2>¿Quién hace esta revisión?</h2>
+    <p class="lead">El rol define qué puedes hacer con cada aclaración y a quién va dirigida la nota final. Puedes cambiarlo después.</p>
+    <div class="roles" role="radiogroup" aria-label="Rol de quien revisa">${Object.entries(E.ROLES).map(([k, r]) => `<label class="role-card ${S.role === k ? 'on' : ''}"><input type="radio" name="role" id="role-${k}" data-role="${k}" ${S.role === k ? 'checked' : ''}><span class="rc-t">${esc(r.label)}</span><span class="rc-d">${esc(r.desc)}</span><span class="rc-n">Nota final: ${esc(r.note)}</span></label>`).join('')}</div>
+  </section>
   ${S.months.length ? `<div class="banner warn"><span>Este análisis ya contiene ${S.months.length} mes${S.months.length === 1 ? '' : 'es'} interpretado${S.months.length === 1 ? '' : 's'} (${E.sortMonths(S.months).map(m => esc(m.period)).join(', ')}) de cargas anteriores, guardados en este navegador. Los PDFs nuevos se agregan a ellos. Si quieres analizar solo un estado de cuenta, usa «Interrumpir y comenzar nuevo análisis» al final de esta pantalla.</span></div>` : ''}
   <section class="panel"><h2>Estados de cuenta (PDF)</h2>
     <div class="drop" id="drop"><strong>Arrastra aquí los PDFs</strong><span>o</span><label class="btn sm" for="pdf-in">Elegir archivos</label><input id="pdf-in" type="file" accept="application/pdf,.pdf" multiple hidden><span class="hint" style="font-size:12px;color:var(--ink-3)">Hasta 12 archivos · 20 MB y 100 páginas cada uno · PDF con texto, escaneado o mixto: las páginas escaneadas se leen como imagen</span></div>
@@ -788,8 +802,10 @@ function stage2() {
     ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
+    <p class="lead">${S.role === 'admin' ? 'Responde las que puedas con tu documentación; deja anotadas las que requieran revisión posterior.' : 'Tú solo tienes el estado de cuenta: envía cada duda como observación a la administración (puedes editar la redacción sugerida) o respóndela si tienes la información.'}</p>
     ${qs.length ? qs.map(q => questionView(q, catOpts)).join('') : '<p>No hay preguntas pendientes.</p>'}
   </section>
+  ${observationsPanel()}
   <section class="panel"><div class="row" style="justify-content:space-between"><h2>Confirmación</h2><div class="row">
       <button class="btn sm" data-act="check-all" ${dis(allChecked)}>Seleccionar todo</button>
       <button class="btn sm ghost" data-act="check-none" ${dis(!Object.values(checks).some(Boolean))}>Deseleccionar todo</button></div></div>
@@ -806,6 +822,7 @@ function stage2() {
 }
 
 function monthCard(m, catOpts) {
+  const obsIds = new Set(observations().map(o => o.movementId).filter(Boolean));
   const oopIds = new Set(m.outOfPeriodDecision === 'keep' ? [] : E.outOfPeriod(m).map(x => x.id));
   const movs = [...m.movements, ...m.unclassifiedMovements].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const file = S.files.find(f => f.id === m.fileId);
@@ -829,7 +846,7 @@ function monthCard(m, catOpts) {
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
     <div class="tbl-wrap"><table><thead><tr><th class="n">No.</th><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    ${movs.map((x, i) => `<tr class="${x.amount === null || oopIds.has(x.id) ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="n mono rownum">${i + 1}</td><td class="mono date-c">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}${oopIds.has(x.id) ? ' <span class="pill bad" title="La fecha está fuera del período del estado de cuenta">Fuera del período</span>' : ''}${obsIds.has(x.id) ? ' <span class="pill moderate" title="Enviado como observación a la administración">Sin aclarar</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -887,20 +904,38 @@ function questionMovement(q) {
 
 function questionView(q, catOpts) {
   const mv = questionMovement(q);
-  let input = '';
-  if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
-  else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
-  else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
-  else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
-  else if (q.kind === 'origin') input = '';
-  else input = `<textarea id="qa-${esc(q.id)}" data-qtext="${esc(q.id)}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
-  return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${esc(q.id)}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${input}</div>`;
+  const id = esc(q.id);
+  let answer = '';
+  if (q.kind === 'category') answer = `<select id="qa-${id}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
+  else if (q.kind === 'amount') answer = `<input type="number" step="0.01" min="0" id="qa-${id}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'balance') answer = `<input type="number" step="0.01" id="qa-${id}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'origin') answer = '<p class="muted">Captura el origen de cada abono en la columna «Origen» de la tabla.</p>';
+  else answer = `<textarea id="qa-${id}" data-qtext="${id}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
+  const draft = q.observationDraft || `Se solicita a la administración aclarar lo siguiente: ${q.prompt}`;
+  let body;
+  if (q.kind === 'outofperiod') body = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
+  else if (S.role === 'admin') body = `${answer}<div class="row q-actions"><button class="btn sm" data-act="q-obs" data-q="${id}" ${dis()}>${esc(R().obsAction)}</button><button class="btn sm ghost" data-act="q-dismiss" data-q="${id}" ${dis()}>No es relevante</button></div><input type="hidden" id="obs-${id}" value="${esc(draft)}">`;
+  else body = `<label class="f obs-draft">Observación sugerida para la administración ${q.kind === 'text' ? src('ia') : src('motor')}<textarea id="obs-${id}" rows="2">${esc(draft)}</textarea></label>
+    <div class="row q-actions"><button class="btn sm primary" data-act="q-obs" data-q="${id}" ${dis()}>${esc(R().obsAction)}</button><button class="btn sm" data-act="q-answer" data-q="${id}" ${dis()}>${answerOpen.has(q.id) ? 'Ocultar respuesta' : 'Tengo la respuesta'}</button><button class="btn sm ghost" data-act="q-dismiss" data-q="${id}" ${dis()}>No es relevante</button></div>
+    ${answerOpen.has(q.id) || (q.kind === 'text' && (S.answers[q.id] || '').trim()) ? `<div class="q-answer">${answer}</div>` : ''}`;
+  return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${id}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${body}</div>`;
+}
+
+// Observaciones enviadas a la administración (o puntos pendientes del administrador).
+function observationsPanel() {
+  const obs = observations();
+  const dis_ = dismissed();
+  if (!obs.length && !dis_.length) return '';
+  return `<section class="panel" id="observations"><div class="row" style="justify-content:space-between"><h2>${esc(R().obsPanel)} (${obs.length}) ${src('user')}</h2>${obs.length ? `<button class="btn sm" data-act="obs-copy">Copiar lista</button>` : ''}</div>
+    ${obs.length ? `<ol class="obs-list">${obs.map(o => `<li><div class="row"><span class="pill neutral">${esc(o.period)}</span>${o.blocking ? '<span class="pill critical">Era bloqueante</span>' : ''}${o.movementId ? `<a href="#mv-${esc(o.movementId)}" data-scroll="mv-${esc(o.movementId)}">ver movimiento</a>` : ''}<button class="btn sm ghost" data-act="obs-remove" data-q="${esc(o.qid)}">Quitar</button></div><textarea id="obst-${esc(o.qid)}" data-obstext="${esc(o.qid)}" rows="2">${esc(o.text)}</textarea></li>`).join('')}</ol>` : ''}
+    ${dis_.length ? `<p class="muted">${dis_.length} aclaración(es) marcadas como no relevantes. <button class="btn sm ghost" data-act="dismiss-restore">Restaurarlas</button></p>` : ''}
+    <span class="status" id="obs-copy-status"></span></section>`;
 }
 
 // ----- Etapa 3 -----
 function stage3() {
   const ind = S.diagnosis?.indicators || indicators();
-  const an = S.diagnosis?.anomalies || E.detectAnomalies(months(), ind);
+  const an = S.diagnosis?.anomalies || E.detectAnomalies(months(), ind, { observations: observations() });
   const ai = S.diagnosis?.ai;
   const stale = S.diagnosis && S.diagnosis.hash !== mappingHash();
   return `${head(3, 'Diagnóstico', 'El motor calcula flujo, variaciones, composición de egresos, fondos comprometidos y recaudación; Claude interpreta esos resultados y propone hallazgos.')}
@@ -1032,7 +1067,7 @@ function stage6() {
     <label class="check"><input type="checkbox" id="rv-b" data-rv="b" ${d.b ? 'checked' : ''}><span>(b) Verifiqué la evidencia de cada hallazgo frente a los movimientos.</span></label>
     <label class="check"><input type="checkbox" id="rv-c" data-rv="c" ${d.c ? 'checked' : ''}><span>(c) Las recomendaciones son coherentes con la situación del condominio.</span></label>
     <div class="grid2"><label class="f">Nombre del revisor<input type="text" id="rv-name" data-rvname="1" value="${esc(d.reviewer)}" maxlength="120"></label>
-    <label class="f">Función<select id="rv-role" data-rvrole="1">${['Administrador', 'Miembro del Comité de Vigilancia', 'Condómino revisor'].map(o => `<option ${o === d.role ? 'selected' : ''}>${o}</option>`).join('')}</select></label></div>
+    <div class="kpi"><span class="l">Función (elegida en la etapa 1)</span><span class="v" style="font-family:var(--f-body);font-size:15px">${esc(R().reviewer)}</span></div></div>
     <p style="font-size:12.5px;color:var(--ink-3)">Esta aprobación queda registrada con fecha y hora. No es firma electrónica ni acta de Asamblea.</p>`}
     <div class="actionbar">
       ${rv?.approvedAt ? (S.alert ? '<button class="btn primary" data-go="7">Ver nota de alerta</button>' : `<button class="btn primary" data-act="alert" ${dis()}>Generar nota de alerta</button>`) : `<button class="btn primary" data-act="approve" ${dis(!ok)}>Aprobar reporte</button>`}
@@ -1058,7 +1093,7 @@ function refreshReviewControls() {
 // ----- Etapa 7 -----
 function stage7() {
   const a = S.alert;
-  return `${head(7, 'Nota de alerta para el Comité de Vigilancia', 'Comprueba que la nota sea coherente con el reporte aprobado. Es un instrumento de apoyo interno: no se envía a nadie automáticamente.')}
+  return `${head(7, esc(R().note), 'Comprueba que el documento sea coherente con el reporte aprobado. Es un instrumento de apoyo: no se envía a nadie automáticamente.')}
   ${a ? `<section class="panel doc-lite"><div class="doc" style="padding:22px">${alertBody(a.ai, S).replace('<h2>', '<h2 style="color:#0b1628">')}</div></section>` : `<section class="panel"><p>La nota aún no se ha generado.</p></section>`}
   <div class="actionbar">
     ${a ? (a.acceptedAt ? `<span class="pill ok">Nota aceptada ${esc(new Date(a.acceptedAt).toLocaleString('es-MX'))}</span><button class="btn primary" data-go="8">Ir a entrega</button>` : `<button class="btn primary" data-act="accept-alert" ${dis()}>Aceptar nota</button>`) : ''}
@@ -1161,6 +1196,24 @@ document.addEventListener('click', async e => {
       }
       invalidate('confirmation'); S.confirmation = null; save(); return render();
     }
+    case 'q-obs': case 'q-dismiss': {
+      const q = [...E.engineQuestions(months()), ...months().flatMap(m => m.aiQuestions || [])].find(x => x.id === t.dataset.q);
+      if (!q) return;
+      const text = (document.getElementById('obs-' + q.id)?.value || q.observationDraft || q.prompt).trim();
+      S.qActions[q.id] = { action: act === 'q-obs' ? 'observation' : 'dismiss', text, prompt: q.prompt, period: q.period, kind: q.kind, blocking: !!q.blocking, movementId: questionMovement(q)?.id || q.movementId || null, at: now() };
+      log(act === 'q-obs' ? 'observación' : 'aclaración_descartada', `${q.period}: ${act === 'q-obs' ? text : q.prompt}`.slice(0, 280));
+      invalidate('confirmation'); S.confirmation = null; save(); return render();
+    }
+    case 'q-answer': { answerOpen.has(t.dataset.q) ? answerOpen.delete(t.dataset.q) : answerOpen.add(t.dataset.q); return render(); }
+    case 'obs-remove': { delete S.qActions[t.dataset.q]; log('observación', 'Observación retirada; la aclaración vuelve a pendientes'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
+    case 'dismiss-restore': { for (const [k] of dismissed()) delete S.qActions[k]; log('aclaración_descartada', 'Aclaraciones restauradas'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
+    case 'obs-copy': {
+      const txt = `${R().obsPanel} — ${CONDO.name}\n\n` + observations().map((o, i) => `${i + 1}. [${o.period}] ${o.text}`).join('\n');
+      const st = document.getElementById('obs-copy-status');
+      try { await navigator.clipboard.writeText(txt); if (st) st.textContent = 'Lista copiada.'; }
+      catch { if (st) { st.textContent = ''; const ta = document.createElement('textarea'); ta.value = txt; ta.rows = 6; ta.style.width = '100%'; st.replaceWith(ta); ta.select(); } }
+      return;
+    }
     case 'reread': { log('relectura', 'Volver a leer el mes para incorporar la morosidad'); await runInterpret([t.dataset.file]); S._checks = {}; save(); return render(); }
     case 'interpret': { const ok = await runInterpret(); if (ok && S.months.length) go(2); return; }
     case 'apply-answers': {
@@ -1203,7 +1256,7 @@ document.addEventListener('click', async e => {
     case 'approve': {
       const d = S._review;
       if (!(d.reviewer.trim() && d.a && d.b && d.c)) return;
-      S.review = { reviewer: d.reviewer.trim(), role: d.role, checks: { a: true, b: true, c: true }, approvedAt: now() };
+      S.review = { reviewer: d.reviewer.trim(), role: R().reviewer, roleKey: S.role, checks: { a: true, b: true, c: true }, approvedAt: now() };
       log('aprobación', `${S.review.reviewer} (${S.review.role})`); save(); render();
       await runAlert();
       if (S.alert) go(7);
@@ -1228,6 +1281,7 @@ document.addEventListener('input', e => {
     save();
   }
   if (t.dataset.qtext) { S.answers[t.dataset.qtext] = t.value; save(); }
+  if (t.dataset.obstext && S.qActions[t.dataset.obstext]) { S.qActions[t.dataset.obstext].text = t.value; save(); }
   if (t.dataset.rvname) { S._review.reviewer = t.value; save(); refreshReviewControls(); }
 });
 
@@ -1237,6 +1291,12 @@ document.addEventListener('change', e => {
   if (t.id === 'json-in' && t.files[0]) {
     t.files[0].text().then(restoreJSON).then(() => { errors.restore = null; }).catch(err => { errors.restore = err.message; render(); });
     t.value = ''; return;
+  }
+  if (t.dataset.role) {
+    S.role = t.dataset.role;
+    log('rol', E.roleOf(S.role).label);
+    if (S.review || S.alert) invalidate('review');
+    save(); return render();
   }
   if (t.dataset.bindCheck) { S[t.dataset.bindCheck] = t.checked; log(t.dataset.bindCheck, t.checked ? 'otorgado' : 'retirado'); save(); return render(); }
   if (t.dataset.bind === 'observationsDraft' || t.dataset.bind?.startsWith('meta.')) { if (t.dataset.bind.startsWith('meta.') && confirmed()) { S.confirmation = null; invalidate('confirmation'); } save(); return render(); }

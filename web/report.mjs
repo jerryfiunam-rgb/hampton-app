@@ -1,5 +1,5 @@
 // Renderizado del reporte (vista previa y HTML descargable) y gráficos SVG.
-import { fmtMXN, LEVEL_LABEL, catLabel } from '../lib/condominio.mjs';
+import { fmtMXN, LEVEL_LABEL, catLabel, roleOf } from '../lib/condominio.mjs';
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const para = s => String(s || '').split(/\n{2,}|\n/).filter(x => x.trim()).map(x => `<p>${esc(x)}</p>`).join('');
@@ -159,6 +159,7 @@ export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   ${para(R.delinquencyAnalysis)}
   <h2>Hallazgos prioritarios</h2>${findings}
   ${S.report?.observations ? `<h2>Observaciones del revisor <span class="src user">Usuario</span></h2>${para(S.report.observations)}` : ''}
+  ${observationsSection(S)}
   <h2>Limitaciones del análisis</h2>${para(R.limitations)}
   ${rv?.approvedAt ? `<div class="approval"><b>Revisión humana:</b> aprobado por ${esc(rv.reviewer)} (${esc(rv.role)}) el ${esc(new Date(rv.approvedAt).toLocaleString('es-MX'))}. Confirmó cifras y cuadre, evidencia de hallazgos y coherencia de recomendaciones. Esta aprobación no es firma electrónica ni acta de Asamblea.</div>` : ''}
   ${includeNote && note ? alertBody(note, S) : ''}`;
@@ -175,17 +176,24 @@ function delinquencySection(ind) {
   <p class="muted">Filas resaltadas: adeudo de 3 meses o más en el último corte. Índice de morosidad = adeudo total ÷ ingresos ordinarios anualizados × 100.</p>`;
 }
 
+function observationsSection(S) {
+  const obs = Object.values(S.qActions || {}).filter(a => a.action === 'observation');
+  if (!obs.length) return '';
+  return `<h2>${esc(roleOf(S.role).obsPanel)} <span class="src user">Usuario</span></h2><ol>${obs.map(o => `<li>[${esc(o.period)}] ${esc(o.text)}</li>`).join('')}</ol>`;
+}
+
 export function alertBody(n, S) {
-  return `<h2>Nota de alerta para el Comité de Vigilancia <span class="src ia">IA</span></h2>
+  const r = roleOf(S.role);
+  return `<h2>${esc(r.note)} <span class="src ia">IA</span></h2>
   <div class="note">
     <p><b>Para:</b> ${esc(n.addressee)}<br><b>De:</b> ${esc(n.sender)}<br><b>Referencia:</b> ${esc(n.reference)}<br><b>Fecha:</b> ${esc(n.date)}</p>
     ${para(n.body)}
     <h3>Hallazgos por orden de urgencia</h3>
     <ol>${(n.findings || []).map(f => `<li><b>${esc(f.title)}</b> <span class="pill ${esc((S.selection.find(s => s.id === f.id) || {}).level || f.level)}">${LEVEL_LABEL[(S.selection.find(s => s.id === f.id) || {}).level || f.level] || ''}</span><br>${esc(f.risk || '')}${f.requiredAction ? `<br><b>Acción requerida:</b> ${esc(f.requiredAction)}` : ''}${f.suggestedDeadline ? ` <b>Plazo sugerido:</b> ${esc(f.suggestedDeadline)}` : ''}</li>`).join('')}</ol>
-    <h3>Preguntas para el administrador en la próxima reunión</h3>
+    <h3>${esc(r.questions)}</h3>
     <ol>${(n.questionsForCommittee || []).map(q => `<li>${esc(q)}</li>`).join('')}</ol>
     ${para(n.legalWarning)}
-    <p class="muted">Instrumento de apoyo interno. No se envía automáticamente ni ejecuta acciones externas.</p>
+    <p class="muted">Documento de apoyo redactado con asistencia de IA. No se envía automáticamente ni ejecuta acciones externas.</p>
   </div>`;
 }
 

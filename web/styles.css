@@ -343,3 +343,19 @@ tr.fund-op td { background: var(--ivy-soft); }
 @keyframes flashrow { 0%, 60% { background: rgba(165, 83, 42, .22); box-shadow: inset 4px 0 0 var(--brick); } 100% { background: transparent; box-shadow: none; } }
 tr.flash td { animation: flashrow 2.6s ease-out; }
 @media (prefers-reduced-motion: reduce) { tr.flash td { animation: none; background: rgba(165, 83, 42, .18); } }
+
+/* Rol de quien revisa */
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.role-card { border: 1.5px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 4px; cursor: pointer; background: var(--surface-2); position: relative; }
+.role-card input { position: absolute; opacity: 0; pointer-events: none; }
+.role-card.on { border-color: var(--brick); background: var(--surface); box-shadow: inset 0 0 0 1px var(--brick); }
+.role-card:focus-within { outline: 2px solid var(--brick); outline-offset: 2px; }
+.rc-t { font-weight: 600; font-size: 14.5px; }
+.rc-d { font-size: 13px; color: var(--ink-2); }
+.rc-n { font-size: 12px; color: var(--ink-3); font-family: var(--f-mono); }
+.obs-draft textarea { min-height: 56px; font-size: 13.5px; }
+.q-actions { gap: 8px; }
+.q-answer { border-top: 1px dashed var(--line-strong); padding-top: 8px; }
+.obs-list { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+.obs-list li { display: grid; gap: 6px; }
+.obs-list textarea { min-height: 52px; font-size: 13.5px; }
