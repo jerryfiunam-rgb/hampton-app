@@ -364,3 +364,4 @@ tr.flash td { animation: flashrow 2.6s ease-out; }
 .kpi .s { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; text-align: left; hyphens: manual; }
 .kpi .s.w { color: var(--mod); }
 .kpis-6 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.btn.danger-text { color: var(--crit); }
