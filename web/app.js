@@ -66,7 +66,7 @@ function save() {
 // Casos guardados con versiones anteriores: unifica nombres de fondo y deduce el origen.
 function migrate(st) {
   for (const m of st.months || []) for (const list of ['movements', 'unclassifiedMovements']) for (const mv of m[list] || []) {
-    mv.fund = E.resolveFund(mv.fund, mv.category, mv.concept);
+    mv.fund = mv.fundManual ? (E.normalizeFund(mv.fund) || E.FUND_NONE) : (mv.fund === E.FUND_NONE ? E.defaultFund(mv.category, mv.concept) : E.resolveFund(mv.fund, mv.category, mv.concept));
     if (mv.origin === undefined) mv.origin = (mv.type === 'abono' || /REEMBOLSO|DEVOLUCION|REINTEGRO/.test(E.normText(mv.concept))) ? E.extractOrigin(`${mv.concept || ''} ${mv.sourceText || ''}`) : '';
   }
   const fo = {};
@@ -785,7 +785,7 @@ function stage2() {
   ${ms.map(m => monthCard(m, catOpts)).join('')}
   ${cont.length ? `<section class="panel"><h2>Continuidad de saldos entre meses ${src('motor')}</h2><div class="tbl-wrap"><table><thead><tr><th>De → a</th><th class="n">Saldo final N</th><th class="n">Saldo inicial N+1</th><th class="n">Diferencia</th><th>Estado</th></tr></thead><tbody>${cont.map(c => `<tr class="${c.ok ? '' : 'flag'}"><td>${c.from} → ${c.to}${c.consecutive ? '' : ' (no consecutivos)'}</td><td class="n">${E.fmtMXN(c.prevFinal)}</td><td class="n">${E.fmtMXN(c.nextInitial)}</td><td class="n">${E.fmtMXN(c.diff)}</td><td>${c.ok ? '<span class="pill ok">Continuo</span>' : c.consecutive ? '<span class="pill bad">Discontinuidad</span>' : '<span class="pill neutral">Meses no consecutivos</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
   <section class="panel"><h2>Fondos identificados ${src('motor')}</h2>
-    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' En «Aplicado» solo se descuentan los egresos asignados a ese fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
+    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
     ${qs.length ? qs.map(q => questionView(q, catOpts)).join('') : '<p>No hay preguntas pendientes.</p>'}
@@ -1251,6 +1251,8 @@ function changeMovement(id, patch, askWhy, why = '') {
     if (!mv) continue;
     const before = { category: mv.category, amount: mv.amount, fund: mv.fund, origin: mv.origin };
     Object.assign(mv, patch);
+    if ('fund' in patch) mv.fundManual = true;
+    else if (patch.category && !mv.fundManual) mv.fund = E.defaultFund(patch.category, mv.concept);
     const what = 'fund' in patch ? `${mv.date} «${mv.concept}»: fondo ${before.fund || E.FUND_NONE} → ${patch.fund}`
       : 'origin' in patch ? `${mv.date} «${mv.concept}»: origen ${before.origin || 'no identificado'} → ${patch.origin || 'no identificado'}`
       : patch.category ? `${mv.date} «${mv.concept}»: ${E.catLabel(before.category)} → ${E.catLabel(patch.category)}` : `${mv.date} «${mv.concept}»: monto ${E.fmtMXN(patch.amount)}`;

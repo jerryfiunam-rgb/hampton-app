@@ -135,7 +135,8 @@ await (await page.$('text=Fondos identificados >> xpath=ancestor::section[1]')).
 const fundOf = async concept => page.$eval(`xpath=//tr[td[3][starts-with(normalize-space(.), "${concept}")]]//select[@data-mvfund]`, el => el.value);
 ok(await fundOf('CUOTA MANTENIMIENTO DEPTO 101-140') === 'Fondo de Administración y Mantenimiento', 'Cuota ordinaria asignada al Fondo de Administración');
 ok(await fundOf('APORTACION IMPERMEAB EDIF 1') === 'Fondo de Impermeabilización', 'Aportación de impermeabilización en su fondo');
-ok(await fundOf('SERV LIMPIEZA ENERO') === 'No especificado', 'Sin certeza: «No especificado»');
+ok(await fundOf('SERV LIMPIEZA ENERO') === 'Fondo de Administración y Mantenimiento' && await fundOf('HONORARIOS ADMINISTRACION') === 'Fondo de Administración y Mantenimiento', 'Gastos corrientes asignados al Fondo de Administración y Mantenimiento');
+ok(await fundOf('SPEI 4471 PROV XYZ') === 'No especificado', 'Sin certeza: «No especificado»');
 ok((await page.$$('td .pill.abono')).length > 0 && (await page.$$('td .pill.cargo')).length > 0, 'Tipo en color: abono verde y cargo rojo');
 const orgIn = await page.$('xpath=//tr[td[3][starts-with(normalize-space(.), "APORTACION IMPERMEAB EDIF 1")]]//input[@data-origin]');
 ok(!!orgIn && !(await page.$('xpath=//tr[td[3][starts-with(normalize-space(.), "SERV LIMPIEZA ENERO")]]//input[@data-origin]')), 'Origen editable en abonos y no en cargos ordinarios');

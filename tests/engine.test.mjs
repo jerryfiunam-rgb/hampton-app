@@ -133,7 +133,7 @@ test('tipo de fondo y origen por movimiento', () => {
   ] }, { file });
   const mv = r.movements.concat(r.unclassifiedMovements);
   assert.deepEqual(mv.map(m => m.origin), ['Torre 1 - 101', 'Torre 2 - 202', 'Torre 4 - 102', '', 'Torre 3 - 402']);
-  assert.deepEqual(mv.map(m => m.fund), [E.FUND_ADMIN, E.FUND_ADMIN, 'Fondo de Reserva', E.FUND_NONE, E.FUND_NONE]);
+  assert.deepEqual(mv.map(m => m.fund), [E.FUND_ADMIN, E.FUND_ADMIN, 'Fondo de Reserva', E.FUND_ADMIN, E.FUND_NONE]);
   const funds = E.computeFunds([r]);
   assert.deepEqual(funds.map(f => f.name), ['Fondo de Reserva']);
   assert.equal(E.extractOrigin('Pago abril 2026 E 12 2026'), '');
@@ -185,6 +185,15 @@ test('Fondo de Administración y Mantenimiento: ingresos ordinarios, fuera del f
   assert.equal(ind.adminFund.balance, 6000);
   assert.equal(ind.committedFunds, 3000);
   assert.equal(E.normalizeFund('Fondo de Administración'), E.FUND_ADMIN);
+});
+
+test('gastos corrientes salen del Fondo de Administración y Mantenimiento', () => {
+  for (const c of ['EF_SEGURIDAD', 'EF_LIMPIEZA', 'EF_AREAS_VERDES', 'EF_ENERGIA', 'HONORARIOS', 'EV_MANTENIMIENTO', 'CAJA_CHICA']) assert.equal(E.defaultFund(c, 'GASTO'), E.FUND_ADMIN, c);
+  for (const c of ['IMPERMEABILIZACION', 'CANALETAS', 'TRANSFER', 'NO_CLASIFICADO']) assert.notEqual(E.defaultFund(c, 'GASTO'), E.FUND_ADMIN, c);
+  assert.equal(E.defaultFund('EV_MANTENIMIENTO', 'MATERIAL IMPERMEAB TORRE 2'), 'Fondo de Impermeabilización');
+  const m = month('2026-04', 10000, 4000, [mv('i1', '2026-04-01', 'CUOTA', 2000, 'abono', 'ING_ORD'), mv('e1', '2026-04-02', 'VIGILANCIA', 5000, 'cargo'), mv('e2', '2026-04-03', 'CFE', 3000, 'cargo')]);
+  const adm = E.computeAdminFund([m]);
+  assert.equal(adm.amountCollected, 2000); assert.equal(adm.amountPaid, 8000); assert.equal(adm.balance, -6000);
 });
 
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
