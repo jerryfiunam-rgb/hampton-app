@@ -385,3 +385,6 @@ tr.subtotal td:first-child, tr.fund-op td:first-child { min-width: 150px; }
 .funds-tbl th { white-space: normal; vertical-align: bottom; }
 .funds-tbl th .src { display: block; width: fit-content; margin: 3px 0 0 auto; }
 .funds-tbl td { padding: 8px 8px; }
+.rep-p.ok { color: var(--ivy); }
+.rep-p.bad { color: var(--crit); }
+.funds-tbl .rep-p.stated { white-space: normal; max-width: 190px; margin-left: auto; text-align: right; margin-top: 4px; line-height: 1.35; }

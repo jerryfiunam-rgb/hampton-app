@@ -777,7 +777,7 @@ function stage2() {
   const qs = questions();
   const cont = E.continuityChecks(ms);
   const adminFund = E.computeAdminFund(ms, S.fundOpenings);
-  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings));
+  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings), E.reportedFundTotals(ms));
   const pend = pendingTextAnswers();
   const block = blockingOpen();
   const conf = S.confirmation;
@@ -803,7 +803,8 @@ function stage2() {
       const key = f.key || f.name;
       const label = f.kind === 'op' ? `${esc(f.name)} <span class="pill ok">Operativo</span>` : f.kind === 'subtotal' ? `<b>${esc(f.name)}</b>` : esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name);
       const bld = f.kind === 'reserve' ? (f.building ? `<span class="pill bld">${esc(f.building)}</span>` : '<span class="muted">Sin edificio identificado</span>') : f.kind === 'subtotal' ? '' : esc(f.buildingOrScope || '—');
-      const rep = f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+      const rep = (f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`)
+        + (f.statedTotal ? `<span class="rep-p stated ${Math.abs(f.statedTotal.diff) <= 1 ? 'ok' : 'bad'}">Total del estado de cuenta: ${E.fmtMXN(f.statedTotal.balance)}<br>${Math.abs(f.statedTotal.diff) <= 1 ? '✓ coincide con la suma por edificio' : `✗ difiere ${E.fmtMXN(f.statedTotal.diff)} de la suma`}</span>` : '');
       return `<tr class="${f.kind === 'op' ? 'fund-op' : f.kind === 'subtotal' ? 'subtotal' : ''}"><td>${label}</td><td>${bld}</td><td class="n">${f.kind === 'subtotal' ? E.fmtMXN(f.opening) : `<input type="number" class="fund-open" step="0.01" id="fund-${i}" data-fund="${esc(key)}" value="${esc(S.fundOpenings[key] ?? '')}" placeholder="0.00">`}</td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td><td class="n">${rep}</td></tr>`;
     }).join('')}</tbody></table></div><p class="muted">El Fondo de Reserva se muestra por edificio. Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, se usa para el fondo comprometido y no hace falta capturar el saldo previo.</p>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>

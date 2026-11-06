@@ -392,6 +392,9 @@ tr.subtotal td:first-child, tr.fund-op td:first-child { min-width: 150px; }
 .funds-tbl th { white-space: normal; vertical-align: bottom; }
 .funds-tbl th .src { display: block; width: fit-content; margin: 3px 0 0 auto; }
 .funds-tbl td { padding: 8px 8px; }
+.rep-p.ok { color: var(--ivy); }
+.rep-p.bad { color: var(--crit); }
+.funds-tbl .rep-p.stated { white-space: normal; max-width: 190px; margin-left: auto; text-align: right; margin-top: 4px; line-height: 1.35; }
 
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
@@ -724,18 +727,48 @@ const formatBuilding = s => { const t = String(s || '').trim(); return t ? (buil
 const movementBuilding = mv => (mv.scope && formatBuilding(mv.scope)) || buildingOf(mv.origin || '') || buildingOf(mv.concept || '');
 const fundKey = (name, building) => (building ? `${name} · ${building}` : name);
 
+// Separa, por mes y fondo, los saldos por edificio del renglón de TOTAL del fondo. Un saldo sin edificio
+// es el total si viene marcado como tal o si coincide (±$1) con la suma de los edificios del mismo mes.
+function splitReported(month) {
+  const byFund = new Map();
+  for (const b of month.fundBalances || []) {
+    if (b.balance === null || b.balance === undefined) continue;
+    const name = normalizeFund(b.fund) || b.fund;
+    if (!byFund.has(name)) byFund.set(name, []);
+    byFund.get(name).push({ ...b, fund: name, building: formatBuilding(b.building) });
+  }
+  const entries = [], totals = new Map();
+  for (const [name, list] of byFund) {
+    const withB = list.filter(b => b.building && !b.isTotal);
+    const sumB = round2(withB.reduce((s, b) => s + Number(b.balance), 0));
+    for (const b of list) {
+      const global = !b.building || b.isTotal;
+      if (global && withB.length && (b.isTotal || Math.abs(Number(b.balance) - sumB) <= TOL)) {
+        totals.set(name, { balance: Number(b.balance), sumBuildings: sumB, diff: round2(Number(b.balance) - sumB), period: month.period, asOf: b.asOf || null });
+      } else entries.push(b);
+    }
+  }
+  return { entries, totals };
+}
+
 // Saldos de fondos que reporta el estado de cuenta, del mes más reciente que los incluya.
 function reportedBalances(months) {
   const out = new Map();
-  for (const m of sortMonths(months)) for (const b of m.fundBalances || []) {
-    if (b.balance === null || b.balance === undefined) continue;
-    const name = normalizeFund(b.fund) || b.fund;
-    const key = name === RESERVE_FUND ? fundKey(name, formatBuilding(b.building)) : name;
+  for (const m of sortMonths(months)) for (const b of splitReported(m).entries) {
+    const name = b.fund;
+    const key = name === RESERVE_FUND ? fundKey(name, b.building) : name;
     const prev = out.get(key);
     // Mes más reciente gana; dentro del mismo mes se suman (fondos reportados por edificio fuera de la reserva).
     if (!prev || prev.period < m.period) out.set(key, { balance: Number(b.balance), period: m.period, asOf: b.asOf || null });
     else if (prev.period === m.period) prev.balance = round2(prev.balance + Number(b.balance));
   }
+  return out;
+}
+
+// Totales por fondo que reporta el estado de cuenta (del mes más reciente), para verificar la suma por edificio.
+function reportedFundTotals(months) {
+  const out = {};
+  for (const m of sortMonths(months)) for (const [name, t] of splitReported(m).totals) out[name] = t;
   return out;
 }
 
@@ -874,6 +907,7 @@ function computeIndicators(months, condo = {}, fundOpenings = {}) {
     categoryChanges,
     funds,
     adminFund,
+    fundTotals: reportedFundTotals(ms),
     committedFunds: committed,
     bankBalance,
     committedPct: bankBalance ? pct(committed, bankBalance) : null,
@@ -1153,7 +1187,7 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
     movements: movs, unclassifiedMovements: [],
     aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), observationDraft: String(q.observation || '').slice(0, 600), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null, movementId: linkQuestionMovement(q.prompt || q.question, Number.isInteger(q.movementIndex) ? q.movementIndex : null, movs) })).filter(q => q.prompt),
     notes: Array.isArray(raw?.notes) ? raw.notes.map(normalizeNote).filter(n => n.detail) : [],
-    fundBalances: (Array.isArray(raw?.fundBalances) ? raw.fundBalances : []).map(b => ({ fund: normalizeFund(b.fund) || String(b.fund || '').trim(), building: formatBuilding(b.building), balance: num(typeof b.balance === 'string' ? parseAmount(b.balance) : b.balance), asOf: isDate(b.asOf) ? b.asOf : null, sourcePageNumber: Number.isInteger(b.sourcePageNumber) ? b.sourcePageNumber : null })).filter(b => b.fund && b.balance !== null),
+    fundBalances: (Array.isArray(raw?.fundBalances) ? raw.fundBalances : []).map(b => ({ fund: normalizeFund(b.fund) || String(b.fund || '').trim(), isTotal: b.isTotal === true || /^TOTAL/.test(normText(b.building)), building: /^TOTAL/.test(normText(b.building)) ? '' : formatBuilding(b.building), balance: num(typeof b.balance === 'string' ? parseAmount(b.balance) : b.balance), asOf: isDate(b.asOf) ? b.asOf : null, sourcePageNumber: Number.isInteger(b.sourcePageNumber) ? b.sourcePageNumber : null })).filter(b => b.fund && b.balance !== null),
     delinquency: normalizeDelinquency(raw?.delinquency, period) || { found: false, asOf: null, reportedTotal: null, rows: [] },
   });
 }
@@ -1237,7 +1271,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, RESERVE_FUND, NO_BUILDING, buildingOf, formatBuilding, movementBuilding, fundKey, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, ROLES, roleOf, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, RESERVE_FUND, NO_BUILDING, buildingOf, formatBuilding, movementBuilding, fundKey, reportedFundTotals, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, ROLES, roleOf, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1359,7 +1393,7 @@ Reglas:
 - Departamento de cada renglón: puede aparecer como columna propia (Depto, Unidad, Condómino, Referencia), como encabezado de grupo ("TORRE 4", "EDIFICIO B") que aplica a los renglones de abajo, o dentro de la referencia del depósito. Llévalo a origin y conserva en concept el texto del renglón tal como está (no lo resumas). Un movimiento por renglón del documento: no repitas renglones ni inventes renglones que no existen.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
 - questions: preguntas concretas [{prompt, blocking, movementIndex, observation}] (movementIndex = posición, desde 0, del movimiento en tu lista movements; menciona en prompt su fecha y monto). observation: la misma duda redactada como solicitud formal, breve y neutral a la administración (p. ej. "Se solicita a la administración aclarar a qué cuotas se aplica el ingreso de $20,000.00 del 05/04/2026 (Torre 3 - 402)."); no supongas la respuesta sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
-- fundBalances: saldos de fondos que el estado de cuenta REPORTA al corte (por ejemplo, el Fondo de Reserva por torre o edificio, impermeabilización, canaletas, administración): [{fund, building ("Torre 4", "Edificio B" o "" si es global), balance, asOf (YYYY-MM-DD o null), sourcePageNumber}]. Transcribe solo los que aparezcan; no los calcules. Usa [] si no hay.
+- fundBalances: saldos de fondos que el estado de cuenta REPORTA al corte (por ejemplo, el Fondo de Reserva por torre o edificio, impermeabilización, canaletas, administración): [{fund, building ("Torre 4", "Edificio B" o "" si es global), balance, asOf (YYYY-MM-DD o null), isTotal, sourcePageNumber}]. Si el documento muestra además el TOTAL del fondo (la suma de los edificios), inclúyelo con building "" e isTotal:true; nunca lo pongas como si fuera un edificio. Transcribe solo los que aparezcan; no los calcules. Usa [] si no hay.
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
 ${p.previous ? `\nAclaraciones del usuario que debes aplicar:\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}\nMapeo anterior, SOLO como referencia para entender las aclaraciones. Vuelve a leer cada movimiento directamente de las páginas: no copies filas del mapeo anterior sin verificarlas, no repitas movimientos y corrige conceptos que hayan perdido el departamento:\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}` : ''}
@@ -1590,14 +1624,15 @@ function flowTable(ind) {
 }
 
 // Filas de fondos: operativo primero, la reserva por edificio con su subtotal, después los demás.
-function fundRows(adminFund, funds) {
+function fundRows(adminFund, funds, totals = {}) {
   const rows = adminFund ? [{ ...adminFund, kind: 'op' }] : [];
   const reserve = funds.filter(f => f.name === 'Fondo de Reserva');
   rows.push(...reserve.map(f => ({ ...f, kind: 'reserve' })));
   if (reserve.length > 1) {
     const sum = k => reserve.reduce((s, f) => s + Number(f[k] || 0), 0);
     const anyRep = reserve.some(f => f.reportedBalance !== null);
-    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null });
+    const t = totals['Fondo de Reserva'] || null;
+    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null, statedTotal: t });
   }
   rows.push(...funds.filter(f => f.name !== 'Fondo de Reserva').map(f => ({ ...f, kind: 'special' })));
   return rows;
@@ -1605,9 +1640,9 @@ function fundRows(adminFund, funds) {
 const repCell = f => f.reportedBalance === null || f.reportedBalance === undefined ? '—' : `${fmtMXN(f.reportedBalance)}${f.reportedPeriod ? `<span class="rep-p">${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
 
 function fundsTable(ind) {
-  const rows = fundRows(ind.adminFund, ind.funds);
+  const rows = fundRows(ind.adminFund, ind.funds, ind.fundTotals || {});
   if (!rows.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
-  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}</td></tr>`).join('')}</tbody></table></div>
+  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}${f.statedTotal ? `<span class="rep-p">Total del estado: ${fmtMXN(f.statedTotal.balance)} · ${Math.abs(f.statedTotal.diff) <= 1 ? 'coincide' : `difiere ${fmtMXN(f.statedTotal.diff)}`}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
   <p class="muted">Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, es el que se usa para el fondo comprometido.</p>`;
 }
 
@@ -2611,7 +2646,7 @@ function stage2() {
   const qs = questions();
   const cont = E.continuityChecks(ms);
   const adminFund = E.computeAdminFund(ms, S.fundOpenings);
-  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings));
+  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings), E.reportedFundTotals(ms));
   const pend = pendingTextAnswers();
   const block = blockingOpen();
   const conf = S.confirmation;
@@ -2637,7 +2672,8 @@ function stage2() {
       const key = f.key || f.name;
       const label = f.kind === 'op' ? `${esc(f.name)} <span class="pill ok">Operativo</span>` : f.kind === 'subtotal' ? `<b>${esc(f.name)}</b>` : esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name);
       const bld = f.kind === 'reserve' ? (f.building ? `<span class="pill bld">${esc(f.building)}</span>` : '<span class="muted">Sin edificio identificado</span>') : f.kind === 'subtotal' ? '' : esc(f.buildingOrScope || '—');
-      const rep = f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+      const rep = (f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`)
+        + (f.statedTotal ? `<span class="rep-p stated ${Math.abs(f.statedTotal.diff) <= 1 ? 'ok' : 'bad'}">Total del estado de cuenta: ${E.fmtMXN(f.statedTotal.balance)}<br>${Math.abs(f.statedTotal.diff) <= 1 ? '✓ coincide con la suma por edificio' : `✗ difiere ${E.fmtMXN(f.statedTotal.diff)} de la suma`}</span>` : '');
       return `<tr class="${f.kind === 'op' ? 'fund-op' : f.kind === 'subtotal' ? 'subtotal' : ''}"><td>${label}</td><td>${bld}</td><td class="n">${f.kind === 'subtotal' ? E.fmtMXN(f.opening) : `<input type="number" class="fund-open" step="0.01" id="fund-${i}" data-fund="${esc(key)}" value="${esc(S.fundOpenings[key] ?? '')}" placeholder="0.00">`}</td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td><td class="n">${rep}</td></tr>`;
     }).join('')}</tbody></table></div><p class="muted">El Fondo de Reserva se muestra por edificio. Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, se usa para el fondo comprometido y no hace falta capturar el saldo previo.</p>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>

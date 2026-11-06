@@ -67,14 +67,15 @@ export function flowTable(ind) {
 }
 
 // Filas de fondos: operativo primero, la reserva por edificio con su subtotal, después los demás.
-export function fundRows(adminFund, funds) {
+export function fundRows(adminFund, funds, totals = {}) {
   const rows = adminFund ? [{ ...adminFund, kind: 'op' }] : [];
   const reserve = funds.filter(f => f.name === 'Fondo de Reserva');
   rows.push(...reserve.map(f => ({ ...f, kind: 'reserve' })));
   if (reserve.length > 1) {
     const sum = k => reserve.reduce((s, f) => s + Number(f[k] || 0), 0);
     const anyRep = reserve.some(f => f.reportedBalance !== null);
-    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null });
+    const t = totals['Fondo de Reserva'] || null;
+    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null, statedTotal: t });
   }
   rows.push(...funds.filter(f => f.name !== 'Fondo de Reserva').map(f => ({ ...f, kind: 'special' })));
   return rows;
@@ -82,9 +83,9 @@ export function fundRows(adminFund, funds) {
 const repCell = f => f.reportedBalance === null || f.reportedBalance === undefined ? '—' : `${fmtMXN(f.reportedBalance)}${f.reportedPeriod ? `<span class="rep-p">${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
 
 export function fundsTable(ind) {
-  const rows = fundRows(ind.adminFund, ind.funds);
+  const rows = fundRows(ind.adminFund, ind.funds, ind.fundTotals || {});
   if (!rows.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
-  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}</td></tr>`).join('')}</tbody></table></div>
+  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}${f.statedTotal ? `<span class="rep-p">Total del estado: ${fmtMXN(f.statedTotal.balance)} · ${Math.abs(f.statedTotal.diff) <= 1 ? 'coincide' : `difiere ${fmtMXN(f.statedTotal.diff)}`}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
   <p class="muted">Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, es el que se usa para el fondo comprometido.</p>`;
 }
 

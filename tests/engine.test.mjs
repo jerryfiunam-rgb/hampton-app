@@ -252,6 +252,25 @@ test('Fondo de Reserva por edificio y saldo reportado por el estado de cuenta', 
   assert.equal(ind.committedFunds, 150000 + 1200 + 80000 + 500 + 3000);
 });
 
+test('el total del fondo no se cuenta como un edificio más', () => {
+  const b = (building, balance, extra = {}) => ({ fund: 'Fondo de Reserva', building, balance, asOf: '2026-06-30', ...extra });
+  const rows = [b('Torre 1', 28505.04), b('Torre 2', 23402.19), b('Torre 3', 27455.52), b('Torre 4', 25124.20), b('Torre 5', 24130.00)];
+  // caso de la captura: total sin marcar, igual a la suma
+  const m1 = month('2026-06', 0, 0, [mv('x', '2026-06-02', 'CUOTA', 1, 'abono')], { fundBalances: [...rows, b('', 128616.95)] });
+  const f1 = E.computeFunds([m1]);
+  assert.ok(!f1.some(f => f.name === 'Fondo de Reserva' && !f.building));
+  assert.equal(E.round2(f1.reduce((s, f) => s + f.effectiveBalance, 0)), 128616.95);
+  assert.deepEqual(E.reportedFundTotals([m1])['Fondo de Reserva'].diff, 0);
+  assert.equal(E.computeIndicators([m1]).committedFunds, 128616.95);
+  // total marcado que no coincide: se informa la diferencia y tampoco se duplica
+  const m2 = month('2026-06', 0, 0, [mv('x', '2026-06-02', 'CUOTA', 1, 'abono')], { fundBalances: [...rows, b('', 130000, { isTotal: true })] });
+  assert.equal(E.reportedFundTotals([m2])['Fondo de Reserva'].diff, 1383.05);
+  assert.ok(!E.computeFunds([m2]).some(f => f.name === 'Fondo de Reserva' && !f.building));
+  // un saldo global distinto a la suma y sin marcar sí se conserva (sin edificio identificado)
+  const m3 = month('2026-06', 0, 0, [mv('x', '2026-06-02', 'CUOTA', 1, 'abono')], { fundBalances: [...rows, b('', 5000)] });
+  assert.ok(E.computeFunds([m3]).some(f => f.name === 'Fondo de Reserva' && !f.building && f.reportedBalance === 5000));
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };
