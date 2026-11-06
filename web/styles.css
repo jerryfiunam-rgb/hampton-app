@@ -336,3 +336,5 @@ td.date-c { white-space: nowrap; }
 td.rownum { color: var(--ink-3); font-size: 12px; width: 1%; }
 td select.fund-sel { width: 176px; }
 .month td select[data-cat] { min-width: 0; width: 180px; }
+
+tr.fund-op td { background: var(--ivy-soft); }

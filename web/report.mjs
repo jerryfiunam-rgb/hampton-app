@@ -67,8 +67,9 @@ export function flowTable(ind) {
 }
 
 export function fundsTable(ind) {
-  if (!ind.funds.length) return '<p>No se identificaron fondos especiales en los movimientos confirmados.</p>';
-  const r = ind.funds.map(f => `<tr><td>${esc(f.name)}</td><td>${esc(f.buildingOrScope || '—')}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td>${esc(f.lastUpdated || '—')}</td></tr>`).join('');
+  const all = [...(ind.adminFund ? [ind.adminFund] : []), ...ind.funds];
+  if (!all.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
+  const r = all.map(f => `<tr><td>${esc(f.name)}${f.operational ? ' (operativo)' : ''}</td><td>${esc(f.buildingOrScope || '—')}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td>${esc(f.lastUpdated || '—')}</td></tr>`).join('');
   return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Alcance</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th><th>Última act.</th></tr></thead><tbody>${r}</tbody></table></div>`;
 }
 
@@ -149,7 +150,8 @@ export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
   ${svgComposition(ind.composition, { accent: '#a5532a' })}
   ${ind.categoryChanges.filter(c => c.flagged).length ? `<div class="tbl-wrap"><table><thead><tr><th>Categoría</th><th>Meses</th><th class="n">Anterior</th><th class="n">Actual</th><th class="n">Variación</th></tr></thead><tbody>${ind.categoryChanges.filter(c => c.flagged).map(c => `<tr><td>${esc(c.label)}</td><td>${esc(c.from)} → ${esc(c.to)}</td><td class="n">${fmtMXN(c.prev)}</td><td class="n">${fmtMXN(c.cur)}</td><td class="n">${fmtPct(c.changePct)}</td></tr>`).join('')}</tbody></table></div><p class="muted">Variaciones mensuales mayores a 20%.</p>` : ''}
   ${para(R.expenseAnalysis)}
-  <h2>Estado de fondos especiales <span class="src motor">Motor</span></h2>
+  <h2>Estado de fondos <span class="src motor">Motor</span></h2>
+  <p class="muted">El Fondo de Administración y Mantenimiento es el fondo operativo (ingresos ordinarios) y no forma parte del fondo comprometido.</p>
   ${fundsTable(ind)}
   ${para(R.fundsAnalysis)}
   <h2>Estado de morosidad por departamento <span class="src pdf">PDF</span> <span class="src motor">Motor</span></h2>

@@ -173,6 +173,20 @@ test('movimientos con fecha fuera del período', () => {
   assert.equal(E.outOfPeriod(late).length, 1);
 });
 
+test('Fondo de Administración y Mantenimiento: ingresos ordinarios, fuera del fondo comprometido', () => {
+  const a = { ...mv('o1', '2026-04-01', 'Cuota ordinaria abril 2026', 2500, 'abono', 'ING_ORD') };
+  const b = { ...mv('o2', '2026-04-02', 'Cuota ordinaria abril 2026', 2500, 'abono', 'ING_ORD') };
+  const c = { ...mv('o3', '2026-04-03', 'APORTACION IMPERMEAB', 3000, 'abono', 'ING_EXT') };
+  const m = month('2026-04', 0, 8000, [a, b, c]);
+  const adm = E.computeAdminFund([m], { [E.FUND_ADMIN]: 1000 });
+  assert.equal(adm.name, 'Fondo de Administración y Mantenimiento');
+  assert.equal(adm.amountCollected, 5000); assert.equal(adm.balance, 6000);
+  const ind = E.computeIndicators([m], {}, { [E.FUND_ADMIN]: 1000 });
+  assert.equal(ind.adminFund.balance, 6000);
+  assert.equal(ind.committedFunds, 3000);
+  assert.equal(E.normalizeFund('Fondo de Administración'), E.FUND_ADMIN);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

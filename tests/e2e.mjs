@@ -128,8 +128,12 @@ ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría 
 ok(body2.includes('Reporte de morosidad por departamento') && body2.includes('Torre 2 - 202') && body2.includes('2 de 80 departamentos con adeudo'), 'Morosidad por departamento visible en la confirmación');
 ok(body2.includes('no encontró un reporte de morosidad'), 'Mes sin reporte de morosidad señalado');
 ok(!!(await page.$('#abandon [data-act="new"]')), 'Opción de interrumpir el análisis en la etapa 2');
+const fundRow = await page.$('tr.fund-op');
+const fundRowTxt = fundRow ? await fundRow.textContent() : '';
+ok(fundRowTxt.includes('Fondo de Administración y Mantenimiento') && fundRowTxt.includes('Operativo') && /\$[\d,]+\.\d{2}/.test(fundRowTxt), 'Fondos identificados incluye el Fondo de Administración y Mantenimiento');
+await (await page.$('text=Fondos identificados >> xpath=ancestor::section[1]')).screenshot({ path: `${SHOTS}/fondos.png` });
 const fundOf = async concept => page.$eval(`xpath=//tr[td[3][starts-with(normalize-space(.), "${concept}")]]//select[@data-mvfund]`, el => el.value);
-ok(await fundOf('CUOTA MANTENIMIENTO DEPTO 101-140') === 'Fondo de Administración', 'Cuota ordinaria asignada al Fondo de Administración');
+ok(await fundOf('CUOTA MANTENIMIENTO DEPTO 101-140') === 'Fondo de Administración y Mantenimiento', 'Cuota ordinaria asignada al Fondo de Administración');
 ok(await fundOf('APORTACION IMPERMEAB EDIF 1') === 'Fondo de Impermeabilización', 'Aportación de impermeabilización en su fondo');
 ok(await fundOf('SERV LIMPIEZA ENERO') === 'No especificado', 'Sin certeza: «No especificado»');
 ok((await page.$$('td .pill.abono')).length > 0 && (await page.$$('td .pill.cargo')).length > 0, 'Tipo en color: abono verde y cargo rojo');
