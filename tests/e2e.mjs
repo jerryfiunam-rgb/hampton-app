@@ -55,7 +55,7 @@ const MOCK = () => {
         movements.push({ date: `${period}-${m[1]}`, concept: m[3].trim(), amount: Number(m[4].replace(/,/g, '')), type: abono ? 'abono' : 'cargo', category: '', sourcePageNumber: 1, sourceText: line });
       }
       if (period === '2026-02') movements.push({ date: '2024-01-02', concept: 'Torre 3 - 402 Cuota de fondo de reserva 2024', amount: 1200, type: 'abono', category: '', sourcePageNumber: 1 });
-      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-03' ? { found: false, rows: [] } : period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }], notes: period === '2026-02' ? [
+      out = { period, bank: 'Banco de prueba', accountType: 'Cheques', currency: 'MXN', initialBalance: val(/SALDO ANTERIOR\s+([\d,.]+)/), finalBalance: val(/SALDO FINAL\s+([\d,.]+)/), reportedIncome: val(/DEPOSITOS\s+([\d,.]+)/), reportedExpense: val(/RETIROS\s+([\d,.]+)/), movements, delinquency: period === '2026-03' ? { found: false, rows: [] } : period === '2026-01' ? { found: true, asOf: '2026-01-31', reportedTotal: 5070, rows: [{ unit: 'Torre 1 - 101', amount: 5000, months: 2, sourcePageNumber: 1 }, { unit: 'Torre 4 - 303', amount: 70, months: 1, sourcePageNumber: 1 }] } : { found: true, asOf: '2026-02-28', reportedTotal: 10000, rows: [{ unit: 'Torre 1 - 101', amount: 7500, months: 3, sourcePageNumber: 1 }, { unit: 'Torre 2 - 202', amount: 2500, months: 1, sourcePageNumber: 1 }] }, questions: [{ prompt: '¿El estado incluye otra cuenta de inversión del condominio?', blocking: false }, ...(period === '2026-01' ? [{ prompt: 'El cargo de $6,200.00 del 12/01/2026 por luz no indica el medidor. ¿Corresponde a áreas comunes?', blocking: false }] : [])], notes: period === '2026-02' ? [
         'Aritmética bancaria cuadra: 648,404.56 + 212,901.83 − 187,641.84 = 673,664.55 (coincide con el saldo actual del estado de cuenta).',
         'Los movimientos fueron tomados de los reportes de ingresos y egresos (páginas 4 a 8). La página 1 solo muestra el resumen.',
         'El depósito en efectivo de $3,500.00 va a Caja Chica y no forma parte de los abonos bancarios; se incluyó con cash=true.',
@@ -125,6 +125,13 @@ ok(!mainTxt.includes('abonos iguales «Cuota ordinaria marzo 2026»'), 'Sin avis
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
 ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría > $5,000');
+const qLuz = await page.$('.q:has-text("El cargo de $6,200.00 del 12/01/2026")');
+const luzLink = qLuz ? await qLuz.$('[data-scroll^="mv-"]') : null;
+ok(!!luzLink && (await luzLink.getAttribute('data-scroll')) === 'mv-2026-01-004', 'Pregunta de Claude ligada a su movimiento por monto y fecha');
+await luzLink.click();
+await page.waitForTimeout(1200);
+const flashed = await page.$eval('#mv-2026-01-004', el => ({ flash: el.classList.contains('flash'), open: el.closest('details').open, visible: (() => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })() }));
+ok(flashed.flash && flashed.open && flashed.visible, 'El enlace abre el mes, lleva al movimiento y lo resalta');
 ok(body2.includes('Reporte de morosidad por departamento') && body2.includes('Torre 2 - 202') && body2.includes('2 de 80 departamentos con adeudo'), 'Morosidad por departamento visible en la confirmación');
 ok(body2.includes('no encontró un reporte de morosidad'), 'Mes sin reporte de morosidad señalado');
 ok(!!(await page.$('#abandon [data-act="new"]')), 'Opción de interrumpir el análisis en la etapa 2');

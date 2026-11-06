@@ -196,6 +196,21 @@ test('gastos corrientes salen del Fondo de Administración y Mantenimiento', () 
   assert.equal(adm.amountCollected, 2000); assert.equal(adm.amountPaid, 8000); assert.equal(adm.balance, -6000);
 });
 
+test('cada pregunta de Claude se liga a su movimiento', () => {
+  const movs = [
+    { id: 'm1', date: '2026-04-01', concept: 'Ingreso de factura para pagos en efectivo', amount: 12332.59, type: 'cargo' },
+    { id: 'm2', date: '2026-04-05', concept: 'Cuota abril', amount: 2500, type: 'abono', origin: 'Torre 3 - 402' },
+    { id: 'm3', date: '2026-04-05', concept: 'Pendiente de aplicar', amount: 20000, type: 'abono', origin: 'Torre 3 - 402' },
+    { id: 'm4', date: '2026-04-02', concept: 'Pendiente de aplicar', amount: 4650, type: 'abono', origin: 'Torre 1 - 104' },
+    { id: 'm5', date: '2026-04-09', concept: 'Pendiente de aplicar', amount: 4650, type: 'abono', origin: 'Torre 2 - 201' },
+  ];
+  assert.equal(E.linkQuestionMovement('El ingreso pendiente de aplicar de $20,000.00 del 05/04/2026 (Torre 3 - 402) no tiene destino claro. La misma unidad pagó además la cuota de abril por $2,500.00 el mismo día.', null, movs), 'm3');
+  assert.equal(E.linkQuestionMovement('El ingreso pendiente de aplicar de $4,650.00 del 02/04/2026 (Torre 1 - 104) supera $3,000 y no tiene periodo.', null, movs), 'm4');
+  assert.equal(E.linkQuestionMovement('¿Qué es el pago de $4,650.00?', 4, movs), 'm5');
+  assert.equal(E.linkQuestionMovement('¿Qué es el pago de $4,650.00?', 0, movs), 'm4');
+  assert.equal(E.linkQuestionMovement('¿El estado incluye otra cuenta de inversión?', null, movs), null);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

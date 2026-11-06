@@ -873,8 +873,20 @@ function delinquencyMonth(m) {
     </tbody><tfoot><tr><td><b>Suma por departamento</b> ${src('motor')}</td><td class="n"><b>${E.fmtMXN(total)}</b></td><td colspan="3">${d.reportedTotal !== null ? `Total del reporte: ${E.fmtMXN(d.reportedTotal)}` : ''}</td></tr></tfoot></table></div></div>`;
 }
 
+// Movimiento al que se refiere una pregunta. Valida la liga guardada (los ids cambian al unir lotes o
+// excluir renglones) y, si no coincide, la busca por monto, fecha y departamento.
+function questionMovement(q) {
+  const m = months().find(x => x.period === q.period);
+  const movs = m ? [...m.movements, ...m.unclassifiedMovements] : allMovements();
+  const saved = q.movementId ? movs.find(x => x.id === q.movementId) : null;
+  if (saved && (q.kind !== 'text' || E.linkQuestionMovement(q.prompt, 0, [saved]) === saved.id)) return saved;
+  if (q.kind !== 'text') return saved;
+  const id = E.linkQuestionMovement(q.prompt, null, movs);
+  return id ? movs.find(x => x.id === id) : null;
+}
+
 function questionView(q, catOpts) {
-  const mv = q.movementId ? allMovements().find(m => m.id === q.movementId) : null;
+  const mv = questionMovement(q);
   let input = '';
   if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
   else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
@@ -1115,7 +1127,7 @@ function wireAfterRender() {
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-go],[data-act],[data-scroll]');
   if (!t || t.disabled) return;
-  if (t.dataset.scroll) { e.preventDefault(); const el = document.getElementById(t.dataset.scroll); el?.closest('details')?.setAttribute('open', ''); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input,select,textarea')?.focus(); return; }
+  if (t.dataset.scroll) { e.preventDefault(); const el = document.getElementById(t.dataset.scroll); el?.closest('details')?.setAttribute('open', ''); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input,select,textarea')?.focus({ preventScroll: true }); if (el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2600); } return; }
   if (t.dataset.go) return go(Number(t.dataset.go));
   const act = t.dataset.act;
   if (busy && !['new-no'].includes(act)) return;

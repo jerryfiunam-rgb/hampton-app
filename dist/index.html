@@ -346,6 +346,11 @@ td select.fund-sel { width: 176px; }
 
 tr.fund-op td { background: var(--ivy-soft); }
 
+/* Movimiento al que se llega desde una pregunta */
+@keyframes flashrow { 0%, 60% { background: rgba(165, 83, 42, .22); box-shadow: inset 4px 0 0 var(--brick); } 100% { background: transparent; box-shadow: none; } }
+tr.flash td { animation: flashrow 2.6s ease-out; }
+@media (prefers-reduced-motion: reduce) { tr.flash td { animation: none; background: rgba(165, 83, 42, .18); } }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -555,6 +560,38 @@ function nextPeriod(p) {
 }
 
 // Preguntas que genera el motor: montos no identificados y no clasificados.
+// ---------- Liga de una pregunta con el movimiento al que se refiere ----------
+// Usa el índice que dio Claude si el movimiento coincide con lo que dice la pregunta; si no, busca
+// por monto (el primero mencionado pesa más), fecha y departamento.
+function questionClues(prompt) {
+  const t = String(prompt || '');
+  const amounts = [...t.matchAll(/\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g)].map(m => Number(m[1].replace(/,/g, ''))).filter(Number.isFinite);
+  const dates = [
+    ...[...t.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)].map(m => `${m[1]}-${m[2]}-${m[3]}`),
+    ...[...t.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)].map(m => `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`),
+  ];
+  return { amounts, dates, origin: extractOrigin(t) };
+}
+function linkQuestionMovement(prompt, movementIndex, movs) {
+  const list = (movs || []).filter(m => m && m.amount !== null);
+  if (!list.length) return null;
+  const c = questionClues(prompt);
+  const fits = mv => !c.amounts.length || c.amounts.some(a => Math.abs(a - Number(mv.amount)) < 0.01);
+  if (Number.isInteger(movementIndex)) for (const i of [movementIndex, movementIndex - 1]) if (movs[i] && movs[i].amount !== null && fits(movs[i])) return movs[i].id;
+  if (!c.amounts.length) return null;
+  let best = null, bestScore = 0;
+  for (const mv of list) {
+    let sc = 0;
+    if (Math.abs(c.amounts[0] - Number(mv.amount)) < 0.01) sc += 4; else if (fits(mv)) sc += 1;
+    if (sc === 0) continue;
+    if (c.dates.includes(mv.date)) sc += 2;
+    if (c.origin && mv.origin && unitKey(c.origin) === unitKey(mv.origin)) sc += 3;
+    else if (c.origin && normText(mv.concept).includes(normText(c.origin).replace(/ - /g, ' '))) sc += 2;
+    if (sc > bestScore) { best = mv; bestScore = sc; }
+  }
+  return bestScore >= 4 ? best.id : null;
+}
+
 // ---------- Movimientos con fecha fuera del período del estado de cuenta ----------
 const addDays = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 function periodWindow(month) {
@@ -1003,7 +1040,7 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
     reportedIncome: num(raw?.reportedIncome), reportedExpense: num(raw?.reportedExpense),
     pettyCashBalance: num(raw?.pettyCashBalance),
     movements: movs, unclassifiedMovements: [],
-    aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null })).filter(q => q.prompt),
+    aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null, movementId: linkQuestionMovement(q.prompt || q.question, Number.isInteger(q.movementIndex) ? q.movementIndex : null, movs) })).filter(q => q.prompt),
     notes: Array.isArray(raw?.notes) ? raw.notes.map(normalizeNote).filter(n => n.detail) : [],
     delinquency: normalizeDelinquency(raw?.delinquency, period) || { found: false, asOf: null, reportedTotal: null, rows: [] },
   });
@@ -1080,7 +1117,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1201,7 +1238,7 @@ Reglas:
   Agrega solo cuando aplique: scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
 - Departamento de cada renglón: puede aparecer como columna propia (Depto, Unidad, Condómino, Referencia), como encabezado de grupo ("TORRE 4", "EDIFICIO B") que aplica a los renglones de abajo, o dentro de la referencia del depósito. Llévalo a origin y conserva en concept el texto del renglón tal como está (no lo resumas). Un movimiento por renglón del documento: no repitas renglones ni inventes renglones que no existen.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
-- questions: preguntas concretas [{prompt, blocking, movementIndex}] sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
+- questions: preguntas concretas [{prompt, blocking, movementIndex}] (movementIndex = posición, desde 0, del movimiento en tu lista movements; menciona en prompt su fecha y monto) sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
 ${p.previous ? `\nAclaraciones del usuario que debes aplicar:\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}\nMapeo anterior, SOLO como referencia para entender las aclaraciones. Vuelve a leer cada movimiento directamente de las páginas: no copies filas del mapeo anterior sin verificarlas, no repitas movimientos y corrige conceptos que hayan perdido el departamento:\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}` : ''}
@@ -2420,8 +2457,20 @@ function delinquencyMonth(m) {
     </tbody><tfoot><tr><td><b>Suma por departamento</b> ${src('motor')}</td><td class="n"><b>${E.fmtMXN(total)}</b></td><td colspan="3">${d.reportedTotal !== null ? `Total del reporte: ${E.fmtMXN(d.reportedTotal)}` : ''}</td></tr></tfoot></table></div></div>`;
 }
 
+// Movimiento al que se refiere una pregunta. Valida la liga guardada (los ids cambian al unir lotes o
+// excluir renglones) y, si no coincide, la busca por monto, fecha y departamento.
+function questionMovement(q) {
+  const m = months().find(x => x.period === q.period);
+  const movs = m ? [...m.movements, ...m.unclassifiedMovements] : allMovements();
+  const saved = q.movementId ? movs.find(x => x.id === q.movementId) : null;
+  if (saved && (q.kind !== 'text' || E.linkQuestionMovement(q.prompt, 0, [saved]) === saved.id)) return saved;
+  if (q.kind !== 'text') return saved;
+  const id = E.linkQuestionMovement(q.prompt, null, movs);
+  return id ? movs.find(x => x.id === id) : null;
+}
+
 function questionView(q, catOpts) {
-  const mv = q.movementId ? allMovements().find(m => m.id === q.movementId) : null;
+  const mv = questionMovement(q);
   let input = '';
   if (q.kind === 'outofperiod') input = `<div class="row"><button class="btn sm danger" data-act="oop-exclude" data-period="${esc(q.period)}" ${dis()}>Excluir ${q.count} movimiento(s) fuera del período</button><button class="btn sm" data-act="oop-keep" data-period="${esc(q.period)}" ${dis()}>Conservarlos (son movimientos reales)</button></div>`;
   else if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
@@ -2662,7 +2711,7 @@ function wireAfterRender() {
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-go],[data-act],[data-scroll]');
   if (!t || t.disabled) return;
-  if (t.dataset.scroll) { e.preventDefault(); const el = document.getElementById(t.dataset.scroll); el?.closest('details')?.setAttribute('open', ''); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input,select,textarea')?.focus(); return; }
+  if (t.dataset.scroll) { e.preventDefault(); const el = document.getElementById(t.dataset.scroll); el?.closest('details')?.setAttribute('open', ''); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.querySelector('input,select,textarea')?.focus({ preventScroll: true }); if (el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2600); } return; }
   if (t.dataset.go) return go(Number(t.dataset.go));
   const act = t.dataset.act;
   if (busy && !['new-no'].includes(act)) return;

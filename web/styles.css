@@ -338,3 +338,8 @@ td select.fund-sel { width: 176px; }
 .month td select[data-cat] { min-width: 0; width: 180px; }
 
 tr.fund-op td { background: var(--ivy-soft); }
+
+/* Movimiento al que se llega desde una pregunta */
+@keyframes flashrow { 0%, 60% { background: rgba(165, 83, 42, .22); box-shadow: inset 4px 0 0 var(--brick); } 100% { background: transparent; box-shadow: none; } }
+tr.flash td { animation: flashrow 2.6s ease-out; }
+@media (prefers-reduced-motion: reduce) { tr.flash td { animation: none; background: rgba(165, 83, 42, .18); } }
