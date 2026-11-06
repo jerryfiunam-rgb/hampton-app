@@ -147,6 +147,17 @@ test('pagos iguales de departamentos distintos no son duplicados', () => {
   assert.ok(E.detectAnomalies([month('2026-04', 10000, 5000, [a, c])]).some(x => x.kind === 'potential_duplicate'));
 });
 
+test('abonos idénticos sin departamento generan aviso y se pueden resolver', () => {
+  const ab = (id, origin = '') => ({ ...mv(id, '2026-04-01', 'Cuota ordinaria abril 2026', 2500, 'abono', 'ING_ORD'), origin, sourcePageNumber: 4 });
+  const m = month('2026-04', 0, 7500, [ab('a'), ab('b'), ab('c'), ab('d', 'Torre 1 - 101')]);
+  const g = E.unidentifiedGroups(m);
+  assert.equal(g.length, 1); assert.equal(g[0].length, 3);
+  const q = E.engineQuestions([m]).find(x => x.kind === 'origin');
+  assert.ok(q && !q.blocking && /3 abonos iguales/.test(q.prompt));
+  const r = validateResult('origins', { origins: [{ i: 0, origin: 'T1-102' }, { i: 1, origin: 'Torre 2 - 202' }, { i: 2, duplicate: true }, { i: 9, origin: 'x' }] }, { movements: [{}, {}, {}] });
+  assert.deepEqual(r.origins.map(o => [o.i, o.duplicate]), [[0, false], [1, false], [2, true]]);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

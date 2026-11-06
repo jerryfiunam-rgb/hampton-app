@@ -31,12 +31,17 @@ const MOCK = () => {
       window.__truncations = (window.__truncations || 0) + 1;
       return { text: '{"period":"2026-03","movements":[', truncated: true };
     }
+    if (op === 'origins') {
+      // Simula la segunda lectura: dos pagos de departamentos distintos y un renglón repetido.
+      window.__originsCalls = (window.__originsCalls || 0) + 1;
+      return { text: JSON.stringify({ origins: [{ i: 0, origin: 'Torre 1 - 101', concept: 'Torre 1 - 101 Cuota ordinaria marzo 2026' }, { i: 1, origin: 'Torre 2 - 202', concept: 'Torre 2 - 202 Cuota ordinaria marzo 2026' }, { i: 2, origin: '', duplicate: true }] }), truncated: false };
+    }
     if (op === 'interpret' && /ESCANEADA/.test(prompt)) {
       // Simulación: la "lectura" de la imagen devuelve los movimientos del PDF sintético mixto.
       if (!opts.images?.length || !(opts.images[0] instanceof Blob)) throw { code: 'invalid_request', message: 'sin imagen' };
       window.__imageBytes = opts.images[0].size;
       const mv = (d, c, a, t) => ({ date: `2026-03-${d}`, concept: c, amount: a, type: t, category: '', sourcePageNumber: 2, sourceText: c });
-      out = { period: '2026-03', bank: 'Banco de prueba', initialBalance: 533500, finalBalance: 561400, reportedIncome: 115000, reportedExpense: 87100, movements: [mv('05', 'CUOTA MANTENIMIENTO DEPTO 101-140', 115000, 'abono'), mv('08', 'SERV LIMPIEZA MARZO', 18000, 'cargo'), mv('10', 'VIGILANCIA SEGURIDAD PRIVADA', 48000, 'cargo'), mv('12', 'CFE LUZ AREAS COMUNES', 6100, 'cargo'), mv('15', 'HONORARIOS ADMINISTRACION', 15000, 'cargo')], questions: [], notes: [] };
+      out = { period: '2026-03', bank: 'Banco de prueba', initialBalance: 533500, finalBalance: 561400, reportedIncome: 115000, reportedExpense: 87100, movements: [mv('05', 'CUOTA MANTENIMIENTO DEPTO 101-140', 115000, 'abono'), mv('08', 'SERV LIMPIEZA MARZO', 18000, 'cargo'), mv('10', 'VIGILANCIA SEGURIDAD PRIVADA', 48000, 'cargo'), mv('12', 'CFE LUZ AREAS COMUNES', 6100, 'cargo'), mv('15', 'HONORARIOS ADMINISTRACION', 15000, 'cargo'), mv('20', 'Cuota ordinaria marzo 2026', 2500, 'abono'), mv('20', 'Cuota ordinaria marzo 2026', 2500, 'abono'), mv('20', 'Cuota ordinaria marzo 2026', 2500, 'abono')], questions: [], notes: [] };
     } else if (op === 'interpret') {
       const t = between(prompt, 'estado_de_cuenta');
       const per = t.match(/AL \d+\/([A-Z]{3})\/(\d{4})/);
@@ -110,7 +115,12 @@ ok(hdrTop >= 0 && hdrTop < 2, 'El encabezado sigue visible al desplazar');
 ok((await page.evaluate(() => window.__calls)).includes('interpret+1img') && (await page.evaluate(() => window.__imageBytes)) > 20000, 'La página escaneada se envía a Claude como imagen JPEG');
 ok((await page.evaluate(() => window.__truncations)) === 1 && (await page.textContent('details.log')).includes('se divide en dos lotes'), 'Respuesta truncada: el PDF se divide en lotes de páginas automáticamente');
 ok((await page.textContent('main')).includes('$561,400.00'), 'Los lotes se unen con los saldos del resumen');
-ok((await page.$$('.pill.scan')).length === 5, 'Movimientos leídos de la imagen marcados como «Escaneado»');
+ok((await page.$$('.pill.scan')).length === 7, 'Movimientos leídos de la imagen marcados como «Escaneado»');
+const origins = await page.$$eval('input[data-origin]', els => els.map(e => e.value));
+ok((await page.evaluate(() => window.__originsCalls)) === 1 && origins.includes('Torre 1 - 101') && origins.includes('Torre 2 - 202'), 'Segunda lectura identifica el departamento de abonos idénticos');
+const mainTxt = await page.textContent('main');
+ok(mainTxt.includes('Torre 1 - 101 Cuota ordinaria marzo 2026') && mainTxt.includes('Renglones repetidos eliminados'), 'Concepto completo recuperado y renglón repetido eliminado');
+ok(!mainTxt.includes('abonos iguales «Cuota ordinaria marzo 2026»'), 'Sin aviso pendiente cuando todos quedan identificados');
 const body2 = await page.textContent('main');
 ok(body2.includes('Diferencia') && body2.includes('Discontinuidad'), 'Se señalan descuadre y discontinuidad');
 ok(body2.includes('Bloqueante'), 'Pregunta bloqueante por egreso sin categoría > $5,000');
@@ -139,7 +149,7 @@ await page.click('[data-act="check-all"]');
 ok(await page.isDisabled('[data-act="confirm"]'), 'La casilla general no permite avanzar con pregunta bloqueante');
 await page.screenshot({ path: `${SHOTS}/2-confirmar.png`, fullPage: false });
 const notesEl = await page.$('details.notes');
-ok(!!notesEl && (await page.$$('details.notes .ng li')).length === 6, 'Observaciones de Claude separadas y agrupadas');
+ok(!!notesEl && (await page.$$('details.notes .ng li')).length === 7, 'Observaciones de Claude separadas y agrupadas');
 await notesEl.scrollIntoViewIfNeeded(); await notesEl.screenshot({ path: `${SHOTS}/notas.png` });
 const qsel = await page.$('select[data-qcat]');
 await qsel.selectOption('EV_MANTENIMIENTO');

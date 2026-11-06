@@ -550,9 +550,27 @@ function nextPeriod(p) {
 }
 
 // Preguntas que genera el motor: montos no identificados y no clasificados.
+// Abonos (o reembolsos) iguales —misma fecha, concepto, monto y página— sin departamento identificado.
+function unidentifiedGroups(month) {
+  const groups = new Map();
+  for (const mv of [...(month.movements || []), ...(month.unclassifiedMovements || [])]) {
+    if (mv.origin || mv.amount === null) continue;
+    if (!(mv.type === 'abono' || REFUND_RE.test(normText(mv.concept)))) continue;
+    const k = [mv.date, normText(mv.concept), round2(mv.amount), mv.type, mv.sourcePageNumber].join('|');
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(mv);
+  }
+  return [...groups.values()].filter(g => g.length > 1);
+}
+
 function engineQuestions(months) {
   const qs = [];
   for (const m of months) {
+    for (const g of unidentifiedGroups(m)) {
+      const x = g[0];
+      qs.push({ id: `q-org-${x.id}`, period: m.period, movementId: x.id, kind: 'origin', blocking: false,
+        prompt: `${g.length} abonos iguales «${x.concept}» por ${fmtMXN(x.amount)} del ${x.date}${x.sourcePageNumber ? ` (pág. ${x.sourcePageNumber})` : ''} no indican de qué departamento provienen. Verifica en el estado de cuenta si son pagos de departamentos distintos y captura el origen de cada uno en la tabla.` });
+    }
     if (num(m.initialBalance) === null) qs.push({ id: `q-ini-${m.period}`, period: m.period, prompt: `No se identificó el saldo inicial de ${m.period}. Indica el monto según el estado de cuenta.`, blocking: true, kind: 'balance', field: 'initialBalance' });
     if (num(m.finalBalance) === null) qs.push({ id: `q-fin-${m.period}`, period: m.period, prompt: `No se identificó el saldo final de ${m.period}. Indica el monto según el estado de cuenta.`, blocking: true, kind: 'balance', field: 'finalBalance' });
     for (const mv of [...(m.movements || []), ...(m.unclassifiedMovements || [])]) {
@@ -1011,7 +1029,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, unidentifiedGroups, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1099,7 +1117,7 @@ const __m_ai_mjs = (() => {
 // Instrucciones del modelo y validación de respuestas. Compartido por navegador y servidor.
 const { CATEGORIES, KINDS, LEVELS, normalizeInterpretation, validateFindings, validateReport, validateAlert, validateMonthMapping } = __m_condominio_mjs;
 
-const AI_OPS = ['interpret', 'analyze', 'report', 'alert'];
+const AI_OPS = ['interpret', 'origins', 'analyze', 'report', 'alert'];
 const toList = v => Array.isArray(v) ? v : (v ? [v] : []);
 const normHyps = v => toList(v).map(h => typeof h === 'string' ? { text: h, quantified: false } : { text: String(h?.text || ''), quantified: !!h?.quantified }).filter(h => h.text);
 
@@ -1129,17 +1147,33 @@ Reglas:
   · fund = tipo de fondo al que entra el dinero (abono) o del que sale (cargo): "Fondo de Administración" para cuotas ordinarias de mantenimiento; "Fondo de Reserva", "Fondo de Impermeabilización", "Fondo de Canaletas" u otro fondo especial cuando el concepto o el documento lo indiquen; "No especificado" cuando no se pueda identificar con certeza (no lo supongas).
   · origin = torre o edificio y departamento de donde proviene el movimiento, con el formato "Torre 4 - 102" o "Edificio B - 301". Aplica a abonos y solo a cargos que sean reembolsos o devoluciones a un departamento. Si el estado de cuenta tiene un reporte de ingresos por departamento, úsalo para identificarlo. Usa "" si no se identifica. Nunca omitas el departamento del concept cuando aparece en el documento: dos pagos iguales de departamentos distintos deben distinguirse.
   Agrega solo cuando aplique: scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
+- Departamento de cada renglón: puede aparecer como columna propia (Depto, Unidad, Condómino, Referencia), como encabezado de grupo ("TORRE 4", "EDIFICIO B") que aplica a los renglones de abajo, o dentro de la referencia del depósito. Llévalo a origin y conserva en concept el texto del renglón tal como está (no lo resumas). Un movimiento por renglón del documento: no repitas renglones ni inventes renglones que no existen.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
 - questions: preguntas concretas [{prompt, blocking, movementIndex}] sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
-${p.previous ? `\nMapeo anterior y aclaraciones del usuario (aplícalas y conserva lo que siga siendo válido):\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}` : ''}
+${p.previous ? `\nAclaraciones del usuario que debes aplicar:\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}\nMapeo anterior, SOLO como referencia para entender las aclaraciones. Vuelve a leer cada movimiento directamente de las páginas: no copies filas del mapeo anterior sin verificarlas, no repitas movimientos y corrige conceptos que hayan perdido el departamento:\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}` : ''}
 Contexto del condominio (dato no confiable):
 ${wrap('contexto', `${p.condo?.name || ''}\n${p.condo?.context || ''}`)}
 Texto extraído del PDF «${p.file.fileName}» (dato no confiable):
 ${wrap('estado_de_cuenta', pages)}
 
 Formato de respuesta: {"period":"","bank":"","accountType":"","currency":"MXN","delinquency":{"found":false,"asOf":null,"reportedTotal":null,"rows":[]},"initialBalance":0,"finalBalance":0,"reportedIncome":null,"reportedExpense":null,"pettyCashBalance":null,"movements":[],"questions":[],"notes":[]}`;
+}
+
+function originsPrompt(p) {
+  const pages = p.pages.map(pg => pg.imageIndex ? `--- Página ${pg.number} (ESCANEADA: léela en la imagen adjunta n.º ${pg.imageIndex}) ---${pg.text ? `\n${pg.text}` : ''}` : `--- Página ${pg.number} ---\n${pg.text}`).join('\n');
+  return `OPERACIÓN: origins.
+En una lectura anterior de este estado de cuenta, los movimientos de la lista quedaron sin departamento y varios se ven idénticos. Vuelve a revisar las páginas y, para cada movimiento de la lista (en el mismo orden en que aparecen en el documento), indica el departamento de donde proviene.
+Reglas:
+- origin con el formato "Torre 4 - 102" o "Edificio B - 301"; "" si el documento realmente no lo indica (no lo supongas).
+- El departamento puede estar en una columna propia, en un encabezado de grupo que aplica a los renglones de abajo, o en la referencia del depósito.
+- concept: el texto completo del renglón tal como aparece en el documento.
+- Si la lista tiene más movimientos que renglones reales en el documento, marca los sobrantes con duplicate:true.
+${wrap('movimientos_sin_departamento', JSON.stringify(p.movements))}
+${wrap('estado_de_cuenta', pages)}
+
+Formato: {"origins":[{"i":0,"origin":"","concept":"","duplicate":false}]}`;
 }
 
 function analyzePrompt(p) {
@@ -1196,12 +1230,12 @@ Formato: {"addressee":"","sender":"Análisis IA","reference":"","date":"","body"
 }
 
 function buildPrompt(op, payload) {
-  const user = { interpret: interpretPrompt, analyze: analyzePrompt, report: reportPrompt, alert: alertPrompt }[op]?.(payload);
+  const user = { interpret: interpretPrompt, origins: originsPrompt, analyze: analyzePrompt, report: reportPrompt, alert: alertPrompt }[op]?.(payload);
   if (!user) throw new Error(`Operación desconocida: ${op}`);
   return { system: COMMON_INSTRUCTION, user };
 }
 
-const MAX_TOKENS = { interpret: 32000, analyze: 12000, report: 12000, alert: 8000 };
+const MAX_TOKENS = { interpret: 32000, origins: 8000, analyze: 12000, report: 12000, alert: 8000 };
 
 // Extrae un objeto JSON de un texto de respuesta.
 function parseJsonText(text) {
@@ -1241,6 +1275,12 @@ function validateResult(op, result, payload) {
     const errs = validateReport(result, payload.findings.map(f => f.id));
     if (errs.length) fail(errs);
     return result;
+  }
+  if (op === 'origins') {
+    if (!Array.isArray(result.origins)) fail(['Falta la lista origins.']);
+    const n = payload.movements.length;
+    const origins = result.origins.filter(o => Number.isInteger(o?.i) && o.i >= 0 && o.i < n).map(o => ({ i: o.i, origin: String(o.origin || '').trim().slice(0, 40), concept: String(o.concept || '').trim().slice(0, 300), duplicate: o.duplicate === true }));
+    return { origins };
   }
   if (op === 'alert') {
     const errs = validateAlert(result, payload.findings.map(f => f.id));
@@ -1459,7 +1499,7 @@ const { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standal
 
 const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
-const TIMEOUT_MS = { interpret: 300000, analyze: 180000, report: 180000, alert: 180000, test: 60000 };
+const TIMEOUT_MS = { interpret: 300000, origins: 180000, analyze: 180000, report: 180000, alert: 180000, test: 60000 };
 const STAGES = [
   { n: 1, t: 'Carga de PDFs', s: 'Carga' },
   { n: 2, t: 'Confirmar datos', s: 'Revisión' },
@@ -1880,6 +1920,39 @@ function mergeDelinquency(parts, period) {
   return { found: true, asOf: ds.map(d => d.asOf).find(Boolean) || null, reportedTotal: ds.map(d => d.reportedTotal).find(v => v !== null && v !== undefined) ?? null, rows: ds.flatMap(d => d.rows).map(r => ({ ...r, id: `${period}-D${String(++n).padStart(3, '0')}` })) };
 }
 
+// Segunda lectura enfocada: si quedaron abonos idénticos sin departamento, Claude revisa solo esas páginas.
+async function resolveOrigins(f, month) {
+  const groups = E.unidentifiedGroups(month);
+  if (!groups.length) return;
+  const byPage = new Map();
+  for (const g of groups) for (const mv of g) { const k = mv.sourcePageNumber ?? 0; if (!byPage.has(k)) byPage.set(k, []); byPage.get(k).push(mv); }
+  let fixed = 0, dropped = 0;
+  for (const [pageNo, movs] of byPage) {
+    const pages = f.pages.filter(p => pageNo ? p.number === pageNo : true).slice(0, 3);
+    if (!pages.length) continue;
+    const chunk = buildChunk(f, pages);
+    try {
+      const res = await callAI('origins', { pages: chunk.pages, movements: movs.map((m, i) => ({ i, date: m.date, concept: m.concept, amount: m.amount, type: m.type })) }, 'interpret', { images: chunk.images, label: `${f.fileName} · identificando departamentos (pág. ${pageNo || '?'})` });
+      const drop = new Set();
+      for (const o of res.origins) {
+        const mv = movs[o.i];
+        if (o.duplicate) { drop.add(mv.id); continue; }
+        const org = E.formatOrigin(o.origin);
+        if (org) { mv.origin = org; fixed++; }
+        if (o.concept && o.concept.length >= mv.concept.length) mv.concept = o.concept;
+      }
+      if (drop.size) {
+        dropped += drop.size;
+        month.movements = month.movements.filter(m => !drop.has(m.id));
+        month.unclassifiedMovements = month.unclassifiedMovements.filter(m => !drop.has(m.id));
+        (month.notes = month.notes || []).push({ kind: 'inconsistencia', title: 'Renglones repetidos eliminados', detail: `En la página ${pageNo} la primera lectura repitió ${drop.size} movimiento(s) que no existen en el documento; se eliminaron. Verifica el cuadre del mes.` });
+      }
+    } catch (e) { log('error_ia', `origins ${f.fileName} pág. ${pageNo}: ${e.code || ''} ${e.message}`); }
+  }
+  Object.assign(month, E.recomputeMonth(month));
+  log('departamentos', `${f.fileName}: ${fixed} movimiento(s) con departamento identificado en segunda lectura${dropped ? `; ${dropped} renglón(es) repetido(s) eliminado(s)` : ''}`);
+}
+
 // Une las partes de un mismo estado de cuenta leído en varios lotes.
 function mergeParts(parts, f) {
   const first = v => parts.map(p => p[v]).find(x => x !== null && x !== undefined && x !== '');
@@ -1914,16 +1987,18 @@ async function runInterpret(onlyIds = null) {
     if (hasScans && PAGE_IMAGES.has(f.id) && AI.mode === 'claude.ai' && !AI.maxImages) { fail(f, Object.assign(new Error('Esta vista no permite enviar imágenes a Claude para leer las páginas escaneadas.'), { code: 'images_unavailable' })); continue; }
     const answers = prev ? (prev.aiQuestions || []).filter(q => S.answers[q.id]).map(q => ({ question: q.prompt, answer: S.answers[q.id] })) : [];
     const groups = interpretChunks(f);
-    const ctx = { prev, answers, splits: 0, forceSplit: groups.length > 1 };
+    // El mapeo anterior solo se envía si hay aclaraciones que aplicar; al releer, Claude lee de cero.
+    const ctx = { prev: answers.length ? prev : null, answers, splits: 0, forceSplit: groups.length > 1 };
     const prog = { name: f.fileName, done: 0, total: groups.length, state: 'en cola' };
     busy.files.push(prog);
     jobs.push({ f, prev, ctx, groups, prog, parts: new Array(groups.length), remaining: groups.length, error: null });
   }
-  const finish = job => {
+  const finish = async job => {
     const { f, prev, parts, prog } = job;
     try {
       const flat = parts.flat();
       const month = flat.length === 1 ? flat[0] : mergeParts(flat, f);
+      await resolveOrigins(f, month);
       const scannedPages = new Set(f.pages.filter(p => p.scanned).map(p => p.number));
       for (const m of [...month.movements, ...month.unclassifiedMovements]) m.fromScan = scannedPages.has(m.sourcePageNumber);
       const errs = E.validateMonthMapping(month);
@@ -1947,7 +2022,7 @@ async function runInterpret(onlyIds = null) {
     try { job.parts[gi] = await interpretPages(job.f, g, job.ctx); }
     catch (e) { if (!job.error) { job.error = e; fail(job.f, e, job.prog); save(); render(); } return; }
     job.prog.done++; updateBusy();
-    if (--job.remaining === 0) finish(job);
+    if (--job.remaining === 0) await finish(job);
   }));
   try { await runPool(tasks, INTERPRET_CONCURRENCY); }
   finally { endBusy(); }
@@ -2292,6 +2367,7 @@ function questionView(q, catOpts) {
   if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
   else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'origin') input = '';
   else input = `<textarea id="qa-${esc(q.id)}" data-qtext="${esc(q.id)}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
   return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${esc(q.id)}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${input}</div>`;
 }

@@ -6,7 +6,7 @@ import { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standa
 
 const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
-const TIMEOUT_MS = { interpret: 300000, analyze: 180000, report: 180000, alert: 180000, test: 60000 };
+const TIMEOUT_MS = { interpret: 300000, origins: 180000, analyze: 180000, report: 180000, alert: 180000, test: 60000 };
 const STAGES = [
   { n: 1, t: 'Carga de PDFs', s: 'Carga' },
   { n: 2, t: 'Confirmar datos', s: 'Revisión' },
@@ -427,6 +427,39 @@ function mergeDelinquency(parts, period) {
   return { found: true, asOf: ds.map(d => d.asOf).find(Boolean) || null, reportedTotal: ds.map(d => d.reportedTotal).find(v => v !== null && v !== undefined) ?? null, rows: ds.flatMap(d => d.rows).map(r => ({ ...r, id: `${period}-D${String(++n).padStart(3, '0')}` })) };
 }
 
+// Segunda lectura enfocada: si quedaron abonos idénticos sin departamento, Claude revisa solo esas páginas.
+async function resolveOrigins(f, month) {
+  const groups = E.unidentifiedGroups(month);
+  if (!groups.length) return;
+  const byPage = new Map();
+  for (const g of groups) for (const mv of g) { const k = mv.sourcePageNumber ?? 0; if (!byPage.has(k)) byPage.set(k, []); byPage.get(k).push(mv); }
+  let fixed = 0, dropped = 0;
+  for (const [pageNo, movs] of byPage) {
+    const pages = f.pages.filter(p => pageNo ? p.number === pageNo : true).slice(0, 3);
+    if (!pages.length) continue;
+    const chunk = buildChunk(f, pages);
+    try {
+      const res = await callAI('origins', { pages: chunk.pages, movements: movs.map((m, i) => ({ i, date: m.date, concept: m.concept, amount: m.amount, type: m.type })) }, 'interpret', { images: chunk.images, label: `${f.fileName} · identificando departamentos (pág. ${pageNo || '?'})` });
+      const drop = new Set();
+      for (const o of res.origins) {
+        const mv = movs[o.i];
+        if (o.duplicate) { drop.add(mv.id); continue; }
+        const org = E.formatOrigin(o.origin);
+        if (org) { mv.origin = org; fixed++; }
+        if (o.concept && o.concept.length >= mv.concept.length) mv.concept = o.concept;
+      }
+      if (drop.size) {
+        dropped += drop.size;
+        month.movements = month.movements.filter(m => !drop.has(m.id));
+        month.unclassifiedMovements = month.unclassifiedMovements.filter(m => !drop.has(m.id));
+        (month.notes = month.notes || []).push({ kind: 'inconsistencia', title: 'Renglones repetidos eliminados', detail: `En la página ${pageNo} la primera lectura repitió ${drop.size} movimiento(s) que no existen en el documento; se eliminaron. Verifica el cuadre del mes.` });
+      }
+    } catch (e) { log('error_ia', `origins ${f.fileName} pág. ${pageNo}: ${e.code || ''} ${e.message}`); }
+  }
+  Object.assign(month, E.recomputeMonth(month));
+  log('departamentos', `${f.fileName}: ${fixed} movimiento(s) con departamento identificado en segunda lectura${dropped ? `; ${dropped} renglón(es) repetido(s) eliminado(s)` : ''}`);
+}
+
 // Une las partes de un mismo estado de cuenta leído en varios lotes.
 function mergeParts(parts, f) {
   const first = v => parts.map(p => p[v]).find(x => x !== null && x !== undefined && x !== '');
@@ -461,16 +494,18 @@ async function runInterpret(onlyIds = null) {
     if (hasScans && PAGE_IMAGES.has(f.id) && AI.mode === 'claude.ai' && !AI.maxImages) { fail(f, Object.assign(new Error('Esta vista no permite enviar imágenes a Claude para leer las páginas escaneadas.'), { code: 'images_unavailable' })); continue; }
     const answers = prev ? (prev.aiQuestions || []).filter(q => S.answers[q.id]).map(q => ({ question: q.prompt, answer: S.answers[q.id] })) : [];
     const groups = interpretChunks(f);
-    const ctx = { prev, answers, splits: 0, forceSplit: groups.length > 1 };
+    // El mapeo anterior solo se envía si hay aclaraciones que aplicar; al releer, Claude lee de cero.
+    const ctx = { prev: answers.length ? prev : null, answers, splits: 0, forceSplit: groups.length > 1 };
     const prog = { name: f.fileName, done: 0, total: groups.length, state: 'en cola' };
     busy.files.push(prog);
     jobs.push({ f, prev, ctx, groups, prog, parts: new Array(groups.length), remaining: groups.length, error: null });
   }
-  const finish = job => {
+  const finish = async job => {
     const { f, prev, parts, prog } = job;
     try {
       const flat = parts.flat();
       const month = flat.length === 1 ? flat[0] : mergeParts(flat, f);
+      await resolveOrigins(f, month);
       const scannedPages = new Set(f.pages.filter(p => p.scanned).map(p => p.number));
       for (const m of [...month.movements, ...month.unclassifiedMovements]) m.fromScan = scannedPages.has(m.sourcePageNumber);
       const errs = E.validateMonthMapping(month);
@@ -494,7 +529,7 @@ async function runInterpret(onlyIds = null) {
     try { job.parts[gi] = await interpretPages(job.f, g, job.ctx); }
     catch (e) { if (!job.error) { job.error = e; fail(job.f, e, job.prog); save(); render(); } return; }
     job.prog.done++; updateBusy();
-    if (--job.remaining === 0) finish(job);
+    if (--job.remaining === 0) await finish(job);
   }));
   try { await runPool(tasks, INTERPRET_CONCURRENCY); }
   finally { endBusy(); }
@@ -839,6 +874,7 @@ function questionView(q, catOpts) {
   if (q.kind === 'category') input = `<select id="qa-${esc(q.id)}" data-qcat="${esc(q.movementId)}"><option value="">Elegir categoría…</option>${catOpts('')}</select>`;
   else if (q.kind === 'amount') input = `<input type="number" step="0.01" min="0" id="qa-${esc(q.id)}" data-qamt="${esc(q.movementId)}" placeholder="Monto en MXN">`;
   else if (q.kind === 'balance') input = `<input type="number" step="0.01" id="qa-${esc(q.id)}" data-qbal="${esc(q.period)}|${esc(q.field)}" placeholder="Monto en MXN">`;
+  else if (q.kind === 'origin') input = '';
   else input = `<textarea id="qa-${esc(q.id)}" data-qtext="${esc(q.id)}" placeholder="Tu respuesta">${esc(S.answers[q.id] || '')}</textarea>`;
   return `<div class="q ${q.blocking ? 'blocking' : ''}" id="q-${esc(q.id)}"><div class="row">${q.blocking ? '<span class="pill critical">Bloqueante</span>' : '<span class="pill neutral">Informativa</span>'}<span class="pill neutral">${esc(q.period)}</span>${q.kind === 'text' ? src('ia') : src('motor')}</div><p>${esc(q.prompt)}</p>${mv ? `<p style="font-size:13px;color:var(--ink-2)">Movimiento: ${esc(mv.date)} · ${esc(mv.concept)} · ${E.fmtMXN(mv.amount)} · <a href="#mv-${esc(mv.id)}" data-scroll="mv-${esc(mv.id)}">ver en la tabla</a></p>` : ''}${input}</div>`;
 }

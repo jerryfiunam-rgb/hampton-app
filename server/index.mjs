@@ -13,7 +13,7 @@ const SITE_ORIGIN = process.env.SITE_ORIGIN || `http://localhost:${PORT}`;
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, '.data');
 const API = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
-const TIMEOUT = { interpret: 300000, analyze: 180000, report: 180000, alert: 180000 };
+const TIMEOUT = { interpret: 300000, origins: 180000, analyze: 180000, report: 180000, alert: 180000 };
 
 const rawKey = process.env.SESSION_ENCRYPTION_KEY;
 if (!rawKey) { console.error('Falta SESSION_ENCRYPTION_KEY (32 bytes aleatorios en base64). Genera una con: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"'); process.exit(1); }
@@ -95,7 +95,7 @@ async function handleAI(req, res, user) {
   const { op, payload, images = [] } = await body(req, 60 * 1024 * 1024);
   if (!AI_OPS.includes(op) || !payload || typeof payload !== 'object') return json(res, 400, { code: 'bad_request', message: 'Operación o datos inválidos.' });
   if (!Array.isArray(images) || images.length > 20 || images.some(b => typeof b !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(b) || b.length > 7_000_000)) return json(res, 400, { code: 'bad_request', message: 'Imágenes inválidas (máximo 20 JPEG por solicitud).' });
-  if (images.length && op !== 'interpret') return json(res, 400, { code: 'bad_request', message: 'Solo la interpretación admite imágenes.' });
+  if (images.length && !['interpret', 'origins'].includes(op)) return json(res, 400, { code: 'bad_request', message: 'Solo la interpretación admite imágenes.' });
   const key = getKey(user);
   if (!key) return json(res, 400, { code: 'not_connected', message: 'Conecta Claude primero.' });
   let prompt;
