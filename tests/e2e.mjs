@@ -196,6 +196,8 @@ await page.click('[data-act="analyze"]');
 await page.waitForSelector('text=Hallazgos propuestos');
 const d = await page.textContent('main');
 ok(/Descuadre aritmético en 2026-02/.test(d) && d.includes('$1,000.00'), 'Regla de cuadre: crítico por $1,000');
+ok(/Cobertura del saldo libre\s*[\d.,]+ meses/.test(d) && d.includes('No es el número de meses analizados') && d.includes('sin saldo previo capturado'), 'Cobertura del saldo libre explicada con sus cifras y aviso de saldo previo');
+await (await page.$('.kpis')).screenshot({ path: `${SHOTS}/kpis.png` });
 ok(/Discontinuidad de saldo 2026-01 → 2026-02/.test(d) && d.includes('$2,000.00'), 'Regla de continuidad: crítico por $2,000');
 ok(/Pago duplicado probable/.test(d), 'Regla de duplicado probable (jardinería)');
 ok(/Sin pago de honorarios/.test(d), 'Regla de honorarios ausentes');

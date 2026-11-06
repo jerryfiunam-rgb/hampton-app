@@ -366,6 +366,11 @@ tr.flash td { animation: flashrow 2.6s ease-out; }
 .obs-list li { display: grid; gap: 6px; }
 .obs-list textarea { min-height: 52px; font-size: 13.5px; }
 
+/* Explicación de cada indicador */
+.kpi .s { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; text-align: left; hyphens: manual; }
+.kpi .s.w { color: var(--mod); }
+.kpis-6 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -1518,14 +1523,20 @@ function fundsTable(ind) {
 }
 
 function kpiGrid(ind) {
-  const k = (l, v) => `<div class="kpi"><span class="l">${esc(l)}</span><span class="v">${v}</span></div>`;
-  return `<div class="kpis">${[
-    k('Saldo bancario al cierre', fmtMXN(ind.bankBalance)),
-    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`),
-    k('Saldo libre de disposición', fmtMXN(ind.freeBalance)),
-    k('Meses de operación cubiertos', ind.monthsCovered === null ? '—' : ind.monthsCovered.toLocaleString('es-MX', { maximumFractionDigits: 1 })),
-    k('Egreso ordinario promedio', fmtMXN(ind.avgOrdinaryExpense)),
-    k('Índice de morosidad', ind.delinquencyIndexPct === null ? 'Sin datos' : fmtPct(ind.delinquencyIndexPct)),
+  const k = (l, v, sub = '', warn = '') => `<div class="kpi"><span class="l">${esc(l)}</span><span class="v">${v}</span>${sub ? `<span class="s">${sub}</span>` : ''}${warn ? `<span class="s w">${warn}</span>` : ''}</div>`;
+  const n = ind.months.length;
+  const noOpening = ind.funds.filter(f => !f.opening).length;
+  const meses = v => `${v.toLocaleString('es-MX', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${v === 1 ? 'mes' : 'meses'}`;
+  return `<div class="kpis kpis-6">${[
+    k('Saldo bancario al cierre', fmtMXN(ind.bankBalance), `Saldo final de ${esc(ind.periodTo || '—')} según el estado de cuenta.`),
+    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`, 'Saldos de los fondos especiales (reserva, impermeabilización, canaletas, anticipos). No incluye el Fondo de Administración y Mantenimiento.',
+      noOpening ? `${noOpening} fondo(s) especial(es) sin saldo previo capturado: si ya tenían saldo antes del período, este monto está subestimado.` : ''),
+    k('Saldo libre de disposición', fmtMXN(ind.freeBalance), 'Saldo bancario al cierre − fondo comprometido.'),
+    k('Cobertura del saldo libre', ind.monthsCovered === null ? '—' : meses(ind.monthsCovered),
+      ind.monthsCovered === null ? 'Sin datos suficientes para calcularla.' : `Meses de gasto ordinario que el saldo libre cubriría sin nuevos ingresos: ${fmtMXN(ind.freeBalance)} ÷ ${fmtMXN(ind.avgOrdinaryExpense)}. No es el número de meses analizados.`,
+      n === 1 ? 'El promedio de gasto se basa en un solo mes; tómalo como referencia.' : ''),
+    k('Egreso ordinario promedio', fmtMXN(ind.avgOrdinaryExpense), `Promedio mensual de ${n} ${n === 1 ? 'mes' : 'meses'} analizado${n === 1 ? '' : 's'}, sin impermeabilización, canaletas ni traspasos entre fondos.`),
+    k('Índice de morosidad', ind.delinquencyIndexPct === null ? 'Sin datos' : fmtPct(ind.delinquencyIndexPct), ind.delinquencyIndexPct === null ? 'Requiere el reporte de morosidad del estado de cuenta.' : 'Adeudo total ÷ ingresos ordinarios anualizados.'),
   ].join('')}</div>`;
 }
 
@@ -1542,7 +1553,7 @@ p{margin:0 0 10px;text-align:justify;hyphens:auto}li{text-align:justify;hyphens:
 table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #e2d8c7;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#f4efe6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#5f5d52}td.n,th.n{text-align:right;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 tr.flag td{background:#fff1f1}.tbl-wrap{overflow-x:auto}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .s{display:block;font-size:11px;color:#7b7363;margin-top:4px;line-height:1.4}.kpi .s.w{color:#8a5b07}.kpis-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
 .chart{width:100%;height:auto;color:#4f4a3e;margin:6px 0 14px}
 .finding{border:1px solid #e2d8c7;border-left:4px solid #888;border-radius:8px;padding:12px 14px;margin:10px 0}.finding.critical{border-left-color:#d64545}.finding.moderate{border-left-color:#d08a12}.finding.observation{border-left-color:#3d78d8}
 .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;margin-left:6px}.pill.critical{background:#fde3e3;color:#a62626}.pill.moderate{background:#fdf0d6;color:#8a5b07}.pill.observation{background:#e2ecfd;color:#2a5bb0}

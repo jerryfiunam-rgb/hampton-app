@@ -359,3 +359,8 @@ tr.flash td { animation: flashrow 2.6s ease-out; }
 .obs-list { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
 .obs-list li { display: grid; gap: 6px; }
 .obs-list textarea { min-height: 52px; font-size: 13.5px; }
+
+/* Explicación de cada indicador */
+.kpi .s { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; text-align: left; hyphens: manual; }
+.kpi .s.w { color: var(--mod); }
+.kpis-6 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
