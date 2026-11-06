@@ -188,19 +188,95 @@ function observationsSection(S) {
   return `<h2>${esc(roleOf(S.role).obsPanel)} <span class="src user">Usuario</span></h2><ol>${obs.map(o => `<li>[${esc(o.period)}] ${esc(o.text)}</li>`).join('')}</ol>`;
 }
 
-export function alertBody(n, S) {
+// Escrito final con formato de correo: encabezado, secciones numeradas, hallazgos en tarjetas,
+// preguntas en recuadro, advertencia resaltada y firma. Estilos propios (fondo claro) para la app y el HTML descargable.
+const MAIL_CSS = `
+.mail{border:1px solid #d8ccb8;border-radius:12px;background:#fffdf9;color:#23211a;overflow:hidden;font-size:14.5px;line-height:1.6;margin:8px 0 16px}
+.mail-h{background:#f4efe6;border-bottom:1px solid #d8ccb8;padding:16px 20px}
+.mail-kind{font:600 11px/1.2 "IBM Plex Mono",monospace;letter-spacing:.12em;text-transform:uppercase;color:#7f3c1b;margin-bottom:10px}
+.mail-meta{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0}
+.mail-meta dt{font-size:12px;font-weight:600;color:#7b7363;text-transform:uppercase;letter-spacing:.06em;padding-top:2px}
+.mail-meta dd{margin:0;font-weight:500;overflow-wrap:anywhere}
+.mail-meta .subj{font-weight:700;font-size:15.5px}
+.mail-b{padding:18px 20px;display:grid;gap:18px}
+.mail-sec h4{display:flex;align-items:center;gap:10px;margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#7f3c1b;border-bottom:1px solid #e2d8c7;padding-bottom:6px}
+.mail-sec h4 .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#a5532a;color:#fffaf3;font:600 12px "IBM Plex Mono",monospace;letter-spacing:0}
+.mail-sec p{margin:0 0 10px;text-align:justify;hyphens:auto}
+.mail-amt{font-family:"IBM Plex Mono",monospace;font-size:.94em;white-space:nowrap}
+.mf{border:1px solid #e2d8c7;border-left:4px solid #888;border-radius:8px;padding:10px 14px;margin:0 0 10px;background:#fff}
+.mf.critical{border-left-color:#b3261e}.mf.moderate{border-left-color:#c48000}.mf.observation{border-left-color:#2f5f8a}
+.mf-t{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:700;margin-bottom:6px}
+.mf-t .k{font-family:"IBM Plex Mono",monospace;color:#7b7363;font-weight:600}
+.mf dl{display:grid;grid-template-columns:150px 1fr;gap:4px 12px;margin:0;font-size:13.5px}
+.mf dt{color:#7b7363;font-weight:600}
+.mf dd{margin:0;text-align:justify;hyphens:auto}
+.mf .due{display:inline-block;background:#fdf0d6;color:#8a5b07;border-radius:999px;padding:0 9px;font-weight:600;font-size:12.5px}
+.mpill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px}
+.mpill.critical{background:#fde3e3;color:#a62626}.mpill.moderate{background:#fdf0d6;color:#8a5b07}.mpill.observation{background:#e2ecfd;color:#2a5bb0}
+.mail-list{margin:0;padding-left:22px;display:grid;gap:6px}
+.mail-q{background:#f3f5ea;border:1px solid #cdd8b4;border-radius:8px;padding:10px 14px 10px 10px}
+.mail-q .mail-list{gap:8px}
+.mail-warn{border:1px solid #e8c48a;background:#fdf6e7;border-radius:8px;padding:12px 14px;display:grid;gap:4px}
+.mail-warn strong{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8a5b07}
+.mail-warn p{margin:0;text-align:justify}
+.mail-sign{border-top:1px dashed #d8ccb8;padding-top:12px}
+.mail-sign b{display:block;margin-top:2px}
+.mail-foot{margin:0;padding:10px 20px;background:#f4efe6;border-top:1px solid #e2d8c7;font-size:12px;color:#7b7363}
+@media (max-width:640px){.mf dl{grid-template-columns:1fr}.mail-meta{grid-template-columns:1fr}.mail-meta dt{padding-top:6px}}
+`;
+const hlMoney = s => esc(s).replace(/(-?\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/g, '<span class="mail-amt">$1</span>');
+const mailParas = s => String(s || '').split(/\n{2,}|\n/).filter(x => x.trim()).map(x => `<p>${hlMoney(x)}</p>`).join('');
+const levelOf = (S, f) => (S.selection.find(s => s.id === f.id) || {}).level || f.level;
+
+function mailParts(n, S) {
   const r = roleOf(S.role);
-  return `<h2>${esc(r.note)} <span class="src ia">IA</span></h2>
-  <div class="note">
-    <p><b>Para:</b> ${esc(n.addressee)}<br><b>De:</b> ${esc(n.sender)}<br><b>Referencia:</b> ${esc(n.reference)}<br><b>Fecha:</b> ${esc(n.date)}</p>
-    ${para(n.body)}
-    <h3>Hallazgos por orden de urgencia</h3>
-    <ol>${(n.findings || []).map(f => `<li><b>${esc(f.title)}</b> <span class="pill ${esc((S.selection.find(s => s.id === f.id) || {}).level || f.level)}">${LEVEL_LABEL[(S.selection.find(s => s.id === f.id) || {}).level || f.level] || ''}</span><br>${esc(f.risk || '')}${f.requiredAction ? `<br><b>Acción requerida:</b> ${esc(f.requiredAction)}` : ''}${f.suggestedDeadline ? ` <b>Plazo sugerido:</b> ${esc(f.suggestedDeadline)}` : ''}</li>`).join('')}</ol>
-    <h3>${esc(r.questions)}</h3>
-    <ol>${(n.questionsForCommittee || []).map(q => `<li>${esc(q)}</li>`).join('')}</ol>
-    ${para(n.legalWarning)}
-    <p class="muted">Documento de apoyo redactado con asistencia de IA. No se envía automáticamente ni ejecuta acciones externas.</p>
-  </div>`;
+  const obs = Object.values(S.qActions || {}).filter(a => a.action === 'observation');
+  const sections = [{ key: 'body', title: S.role === 'admin' ? 'Resumen' : 'Exposición' }];
+  if ((n.findings || []).length) sections.push({ key: 'findings', title: 'Hallazgos por orden de urgencia' });
+  if (obs.length) sections.push({ key: 'obs', title: r.obsPanel });
+  if ((n.questionsForCommittee || []).length) sections.push({ key: 'questions', title: r.questions });
+  return { r, obs, sections };
+}
+
+export function alertBody(n, S) {
+  const { r, obs, sections } = mailParts(n, S);
+  const sec = (k, html) => { const i = sections.findIndex(x => x.key === k); return i < 0 ? '' : `<section class="mail-sec"><h4><span class="n">${i + 1}</span>${esc(sections[i].title)}</h4>${html}</section>`; };
+  return `<style>${MAIL_CSS}</style><h2>${esc(r.note)} <span class="src ia">IA</span></h2>
+  <article class="mail" aria-label="${esc(r.note)}">
+    <header class="mail-h"><div class="mail-kind">${esc(r.note)}</div>
+      <dl class="mail-meta"><dt>Para</dt><dd>${esc(n.addressee)}</dd><dt>De</dt><dd>${esc(n.sender)}</dd><dt>Asunto</dt><dd class="subj">${esc(n.reference)}</dd><dt>Fecha</dt><dd>${esc(n.date)}</dd><dt>Adjunto</dt><dd>Reporte ejecutivo completo (HTML)</dd></dl>
+    </header>
+    <div class="mail-b">
+      ${sec('body', mailParas(n.body))}
+      ${sec('findings', (n.findings || []).map((f, i) => { const lv = levelOf(S, f); return `<div class="mf ${esc(lv)}"><div class="mf-t"><span class="k">${i + 1}.</span>${esc(f.title)}<span class="mpill ${esc(lv)}">${esc(LEVEL_LABEL[lv] || '')}</span></div><dl>${f.risk ? `<dt>Riesgo</dt><dd>${hlMoney(f.risk)}</dd>` : ''}${f.requiredAction ? `<dt>Acción requerida</dt><dd>${hlMoney(f.requiredAction)}</dd>` : ''}${f.suggestedDeadline ? `<dt>Plazo sugerido</dt><dd><span class="due">${esc(f.suggestedDeadline)}</span></dd>` : ''}</dl></div>`; }).join(''))}
+      ${sec('obs', `<ol class="mail-list">${obs.map(o => `<li>${hlMoney(o.text)}</li>`).join('')}</ol>`)}
+      ${sec('questions', `<div class="mail-q"><ol class="mail-list">${(n.questionsForCommittee || []).map(q => `<li>${hlMoney(q)}</li>`).join('')}</ol></div>`)}
+      ${n.legalWarning ? `<div class="mail-warn"><strong>Advertencia</strong>${mailParas(n.legalWarning)}</div>` : ''}
+      <div class="mail-sign">Atentamente,<b>${esc(n.sender)}</b></div>
+    </div>
+    <p class="mail-foot">Se adjunta el reporte ejecutivo completo como soporte. Documento redactado con asistencia de IA; no se envía automáticamente.</p>
+  </article>`;
+}
+
+// Versión en texto para pegar en el cuerpo de un correo.
+export function alertPlainText(n, S) {
+  const { obs, sections } = mailParts(n, S);
+  const head = k => { const i = sections.findIndex(x => x.key === k); return `${i + 1}. ${sections[i].title.toUpperCase()}`; };
+  const out = [`Para: ${n.addressee}`, `De: ${n.sender}`, `Asunto: ${n.reference}`, `Fecha: ${n.date}`, 'Adjunto: Reporte ejecutivo completo (HTML)', '', head('body'), String(n.body || '').trim()];
+  if ((n.findings || []).length) {
+    out.push('', head('findings'));
+    (n.findings || []).forEach((f, i) => {
+      out.push(`${i + 1}) ${f.title} [${LEVEL_LABEL[levelOf(S, f)] || ''}]`);
+      if (f.risk) out.push(`   Riesgo: ${f.risk}`);
+      if (f.requiredAction) out.push(`   Acción requerida: ${f.requiredAction}`);
+      if (f.suggestedDeadline) out.push(`   Plazo sugerido: ${f.suggestedDeadline}`);
+    });
+  }
+  if (obs.length) { out.push('', head('obs')); obs.forEach((o, i) => out.push(`${i + 1}) ${o.text}`)); }
+  if ((n.questionsForCommittee || []).length) { out.push('', head('questions')); n.questionsForCommittee.forEach((q, i) => out.push(`${i + 1}) ${q}`)); }
+  if (n.legalWarning) out.push('', `ADVERTENCIA: ${String(n.legalWarning).trim()}`);
+  out.push('', 'Atentamente,', n.sender, '', 'Se adjunta el reporte ejecutivo completo como soporte.');
+  return out.join('\n');
 }
 
 export function standaloneReport(S, ind, { preview = false, logo = '' } = {}) {

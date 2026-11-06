@@ -2,7 +2,7 @@
 import * as E from '../lib/condominio.mjs';
 import { buildPrompt, parseJsonText, validateResult } from '../lib/ai.mjs';
 import { itemsToLines, checkFileLimits, detectPeriod, PDF_MAX_PAGES, MAX_FILES } from '../lib/pdf-parser.mjs';
-import { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standaloneReport, alertBody } from './report.mjs';
+import { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standaloneReport, alertBody, alertPlainText } from './report.mjs';
 
 const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
@@ -1094,7 +1094,7 @@ function refreshReviewControls() {
 function stage7() {
   const a = S.alert;
   return `${head(7, esc(R().note), 'Comprueba que el documento sea coherente con el reporte aprobado. Es un instrumento de apoyo: no se envía a nadie automáticamente.')}
-  ${a ? `<section class="panel doc-lite"><div class="doc" style="padding:22px">${alertBody(a.ai, S).replace('<h2>', '<h2 style="color:#0b1628">')}</div></section>` : `<section class="panel"><p>La nota aún no se ha generado.</p></section>`}
+  ${a ? `<section class="panel doc-lite"><div class="row" style="justify-content:flex-end"><button class="btn sm" data-act="mail-copy">Copiar como texto para correo</button><span class="status" id="mail-copy-status"></span></div><div class="doc" style="padding:22px">${alertBody(a.ai, S).replace('<h2>', '<h2 style="color:#23211a;margin-bottom:10px">')}</div></section>` : `<section class="panel"><p>La nota aún no se ha generado.</p></section>`}
   <div class="actionbar">
     ${a ? (a.acceptedAt ? `<span class="pill ok">Nota aceptada ${esc(new Date(a.acceptedAt).toLocaleString('es-MX'))}</span><button class="btn primary" data-go="8">Ir a entrega</button>` : `<button class="btn primary" data-act="accept-alert" ${dis()}>Aceptar nota</button>`) : ''}
     <button class="btn" data-act="alert" ${dis()}>${a ? 'Regenerar nota' : 'Generar nota'}</button>
@@ -1110,6 +1110,7 @@ function stage8() {
     <div class="row">
       <button class="btn primary" data-act="dl-html" ${dis()}>Descargar reporte HTML</button>
       <button class="btn" data-act="dl-json" ${dis()}>Descargar copia JSON</button>
+      ${S.alert?.ai ? `<button class="btn" data-act="mail-copy" ${dis()}>Copiar escrito como texto para correo</button>` : ''}<span class="status" id="mail-copy-status"></span>
     </div>
     <p style="font-size:13px;color:var(--ink-2)">Para imprimir o guardar como PDF, abre el HTML descargado y usa el botón «Imprimir / Guardar PDF». La copia JSON contiene datos extraídos, mapeo, decisiones y avance, sin credenciales.</p>
     ${errors.download ? `<div class="status err">${esc(errors.download)}</div>` : ''}
@@ -1207,6 +1208,14 @@ document.addEventListener('click', async e => {
     case 'q-answer': { answerOpen.has(t.dataset.q) ? answerOpen.delete(t.dataset.q) : answerOpen.add(t.dataset.q); return render(); }
     case 'obs-remove': { delete S.qActions[t.dataset.q]; log('observación', 'Observación retirada; la aclaración vuelve a pendientes'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
     case 'dismiss-restore': { for (const [k] of dismissed()) delete S.qActions[k]; log('aclaración_descartada', 'Aclaraciones restauradas'); invalidate('confirmation'); S.confirmation = null; save(); return render(); }
+    case 'mail-copy': {
+      const txt = alertPlainText(S.alert.ai, S);
+      const st = document.getElementById('mail-copy-status');
+      try { await navigator.clipboard.writeText(txt); if (st) st.textContent = 'Texto copiado: pégalo en el cuerpo del correo y adjunta el reporte HTML.'; }
+      catch { if (st) { const ta = document.createElement('textarea'); ta.value = txt; ta.rows = 10; ta.style.width = '100%'; st.replaceWith(ta); ta.select(); } }
+      log('correo', 'Escrito copiado como texto');
+      return;
+    }
     case 'obs-copy': {
       const txt = `${R().obsPanel} — ${CONDO.name}\n\n` + observations().map((o, i) => `${i + 1}. [${o.period}] ${o.text}`).join('\n');
       const st = document.getElementById('obs-copy-status');
