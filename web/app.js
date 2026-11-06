@@ -2,7 +2,7 @@
 import * as E from '../lib/condominio.mjs';
 import { buildPrompt, parseJsonText, validateResult } from '../lib/ai.mjs';
 import { itemsToLines, checkFileLimits, detectPeriod, PDF_MAX_PAGES, MAX_FILES } from '../lib/pdf-parser.mjs';
-import { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standaloneReport, alertBody, alertPlainText } from './report.mjs';
+import { esc, svgBalance, svgComposition, flowTable, fundsTable, fundRows, kpiGrid, standaloneReport, alertBody, alertPlainText } from './report.mjs';
 
 const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
@@ -479,7 +479,7 @@ function mergeParts(parts, f) {
   const movements = parts.flatMap(p => [...p.movements, ...p.unclassifiedMovements]).map(m => ({ ...m, id: `${period}-${String(++n).padStart(3, '0')}` }));
   let q = 0;
   const aiQuestions = parts.flatMap(p => p.aiQuestions || []).map(x => ({ ...x, id: `q-ai-${period}-${++q}`, period }));
-  return E.recomputeMonth({ ...parts[0], period, initialBalance: summary ? summary.initialBalance : (first('initialBalance') ?? null), finalBalance: summary ? summary.finalBalance : (first('finalBalance') ?? null), reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period) });
+  return E.recomputeMonth({ ...parts[0], period, initialBalance: summary ? summary.initialBalance : (first('initialBalance') ?? null), finalBalance: summary ? summary.finalBalance : (first('finalBalance') ?? null), reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period), fundBalances: [...new Map(parts.flatMap(p => p.fundBalances || []).map(b => [`${b.fund}|${b.building}`, b])).values()] });
 }
 
 // Interpreta los PDFs con hasta INTERPRET_CONCURRENCY lecturas simultáneas (lotes de páginas de
@@ -777,7 +777,7 @@ function stage2() {
   const qs = questions();
   const cont = E.continuityChecks(ms);
   const adminFund = E.computeAdminFund(ms, S.fundOpenings);
-  const funds = [...(adminFund ? [adminFund] : []), ...E.computeFunds(ms, S.fundOpenings)];
+  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings));
   const pend = pendingTextAnswers();
   const block = blockingOpen();
   const conf = S.confirmation;
@@ -799,7 +799,13 @@ function stage2() {
   ${ms.map(m => monthCard(m, catOpts)).join('')}
   ${cont.length ? `<section class="panel"><h2>Continuidad de saldos entre meses ${src('motor')}</h2><div class="tbl-wrap"><table><thead><tr><th>De → a</th><th class="n">Saldo final N</th><th class="n">Saldo inicial N+1</th><th class="n">Diferencia</th><th>Estado</th></tr></thead><tbody>${cont.map(c => `<tr class="${c.ok ? '' : 'flag'}"><td>${c.from} → ${c.to}${c.consecutive ? '' : ' (no consecutivos)'}</td><td class="n">${E.fmtMXN(c.prevFinal)}</td><td class="n">${E.fmtMXN(c.nextInitial)}</td><td class="n">${E.fmtMXN(c.diff)}</td><td>${c.ok ? '<span class="pill ok">Continuo</span>' : c.consecutive ? '<span class="pill bad">Discontinuidad</span>' : '<span class="pill neutral">Meses no consecutivos</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
   <section class="panel"><h2>Fondos identificados ${src('motor')}</h2>
-    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
+    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table class="funds-tbl"><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado ${src('motor')}</th><th class="n">Saldo reportado ${src('pdf')}</th></tr></thead><tbody>${funds.map((f, i) => {
+      const key = f.key || f.name;
+      const label = f.kind === 'op' ? `${esc(f.name)} <span class="pill ok">Operativo</span>` : f.kind === 'subtotal' ? `<b>${esc(f.name)}</b>` : esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name);
+      const bld = f.kind === 'reserve' ? (f.building ? `<span class="pill bld">${esc(f.building)}</span>` : '<span class="muted">Sin edificio identificado</span>') : f.kind === 'subtotal' ? '' : esc(f.buildingOrScope || '—');
+      const rep = f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+      return `<tr class="${f.kind === 'op' ? 'fund-op' : f.kind === 'subtotal' ? 'subtotal' : ''}"><td>${label}</td><td>${bld}</td><td class="n">${f.kind === 'subtotal' ? E.fmtMXN(f.opening) : `<input type="number" class="fund-open" step="0.01" id="fund-${i}" data-fund="${esc(key)}" value="${esc(S.fundOpenings[key] ?? '')}" placeholder="0.00">`}</td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td><td class="n">${rep}</td></tr>`;
+    }).join('')}</tbody></table></div><p class="muted">El Fondo de Reserva se muestra por edificio. Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, se usa para el fondo comprometido y no hace falta capturar el saldo previo.</p>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
     <p class="lead">${S.role === 'admin' ? 'Responde las que puedas con tu documentación; deja anotadas las que requieran revisión posterior.' : 'Tú solo tienes el estado de cuenta: envía cada duda como observación a la administración (puedes editar la redacción sugerida) o respóndela si tienes la información.'}</p>

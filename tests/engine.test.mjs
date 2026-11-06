@@ -231,6 +231,27 @@ test('la nota se adapta al rol de quien revisa', () => {
   assert.equal(E.roleOf('x').label, 'Condómino');
 });
 
+test('Fondo de Reserva por edificio y saldo reportado por el estado de cuenta', () => {
+  assert.equal(E.buildingOf('Torre 4 - 102 Cuota reserva'), 'Torre 4');
+  assert.equal(E.buildingOf('APORTACION RESERVA EDIF 1'), 'Edificio 1');
+  assert.equal(E.buildingOf('Cuota reserva 2024'), '');
+  const r = (id, concept, amount, origin = '') => ({ ...mv(id, '2026-04-05', concept, amount, 'abono', 'ING_EXT'), fund: 'Fondo de Reserva', origin });
+  const m = month('2026-04', 0, 0, [r('a', 'Cuota fondo de reserva', 1200, 'Torre 1 - 101'), r('b', 'Cuota fondo de reserva', 1200, 'Torre 1 - 102'), r('c', 'Cuota fondo de reserva', 1200, 'Torre 2 - 201'), r('d', 'Cuota fondo de reserva', 500)],
+    { fundBalances: [{ fund: 'Fondo de Reserva', building: 'Torre 1', balance: 150000, asOf: '2026-04-30' }, { fund: 'Fondo de Reserva', building: 'Torre 3', balance: 80000 }, { fund: 'Fondo de Impermeabilización', building: 'Torre 1', balance: 1000 }, { fund: 'Fondo de Impermeabilización', building: 'Torre 2', balance: 2000 }] });
+  const f = E.computeFunds([m]);
+  const by = Object.fromEntries(f.map(x => [x.key, x]));
+  assert.equal(by['Fondo de Reserva · Torre 1'].amountCollected, 2400);
+  assert.equal(by['Fondo de Reserva · Torre 1'].reportedBalance, 150000);
+  assert.equal(by['Fondo de Reserva · Torre 1'].effectiveBalance, 150000);
+  assert.equal(by['Fondo de Reserva · Torre 2'].reportedBalance, null);
+  assert.equal(by['Fondo de Reserva · Torre 2'].effectiveBalance, 1200);
+  assert.equal(by['Fondo de Reserva · Torre 3'].reportedBalance, 80000);
+  assert.equal(by['Fondo de Reserva'].amountCollected, 500);
+  assert.equal(by['Fondo de Impermeabilización'].reportedBalance, 3000);
+  const ind = E.computeIndicators([m]);
+  assert.equal(ind.committedFunds, 150000 + 1200 + 80000 + 500 + 3000);
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };

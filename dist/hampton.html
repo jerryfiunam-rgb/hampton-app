@@ -381,6 +381,17 @@ p, li, dd, .lead, .summary, .banner, .banner > span, .check > span, .rc-d, .kpi 
 td, th { text-align: left; }
 td.n, th.n { text-align: right; }
 
+/* Fondos: subtotal de la reserva, edificio y fecha del saldo reportado */
+tr.subtotal td { background: var(--surface-3); font-weight: 600; }
+.pill.bld { background: var(--obs-soft); color: var(--obs); border-color: rgba(47,95,138,.3); }
+.rep-p { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400; }
+td input.fund-open { width: 104px; }
+#questions ~ * .fund-open, .fund-open { font-size: 12.5px; }
+tr.subtotal td:first-child, tr.fund-op td:first-child { min-width: 150px; }
+.funds-tbl th { white-space: normal; vertical-align: bottom; }
+.funds-tbl th .src { display: block; width: fit-content; margin: 3px 0 0 auto; }
+.funds-tbl td { padding: 8px 8px; }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -698,21 +709,70 @@ function engineQuestions(months) {
 }
 
 // ---------- Fondos especiales ----------
+// ---------- Fondos especiales (el Fondo de Reserva se desglosa por edificio) ----------
+const RESERVE_FUND = 'Fondo de Reserva';
+const NO_BUILDING = 'Sin edificio identificado';
+// Torre o edificio a partir de un texto ("Torre 4 - 102", "EDIF 1", "T4-303").
+function buildingOf(text) {
+  const t = normText(text);
+  const m = t.match(/\b(TORRE|EDIFICIO|EDIF|ED|TO|T|E)\.?\s*(\d{1,2}|[A-H])\b/);
+  if (!m || (m[1].length <= 2 && !/^\d/.test(m[2]))) return '';
+  return `${/^E/.test(m[1]) ? 'Edificio' : 'Torre'} ${m[2]}`;
+}
+const formatBuilding = s => { const t = String(s || '').trim(); return t ? (buildingOf(t) || t.slice(0, 30)) : ''; };
+const movementBuilding = mv => (mv.scope && formatBuilding(mv.scope)) || buildingOf(mv.origin || '') || buildingOf(mv.concept || '');
+const fundKey = (name, building) => (building ? `${name} · ${building}` : name);
+
+// Saldos de fondos que reporta el estado de cuenta, del mes más reciente que los incluya.
+function reportedBalances(months) {
+  const out = new Map();
+  for (const m of sortMonths(months)) for (const b of m.fundBalances || []) {
+    if (b.balance === null || b.balance === undefined) continue;
+    const name = normalizeFund(b.fund) || b.fund;
+    const key = name === RESERVE_FUND ? fundKey(name, formatBuilding(b.building)) : name;
+    const prev = out.get(key);
+    // Mes más reciente gana; dentro del mismo mes se suman (fondos reportados por edificio fuera de la reserva).
+    if (!prev || prev.period < m.period) out.set(key, { balance: Number(b.balance), period: m.period, asOf: b.asOf || null });
+    else if (prev.period === m.period) prev.balance = round2(prev.balance + Number(b.balance));
+  }
+  return out;
+}
+
 function computeFunds(months, openingBalances = {}) {
   const map = new Map();
-  const touch = (name) => { if (!map.has(name)) map.set(name, { name, buildingOrScope: '', amountCollected: 0, amountPaid: 0, opening: num(openingBalances[name]) || 0, lastUpdated: null }); return map.get(name); };
+  const touch = (name, building = '') => {
+    const key = name === RESERVE_FUND ? fundKey(name, building) : name;
+    if (!map.has(key)) map.set(key, { key, name, building: name === RESERVE_FUND ? building : '', buildingOrScope: '', amountCollected: 0, amountPaid: 0, opening: num(openingBalances[key]) || 0, lastUpdated: null });
+    return map.get(key);
+  };
   for (const m of sortMonths(months)) {
     for (const mv of [...(m.movements || []), ...(m.unclassifiedMovements || [])]) {
       const fund = resolveFund(mv.fund, mv.category, mv.concept);
       if (!isSpecialFund(fund) || mv.amount === null) continue;
-      const f = touch(fund);
-      if (mv.scope && !f.buildingOrScope.includes(mv.scope)) f.buildingOrScope = [f.buildingOrScope, mv.scope].filter(Boolean).join(', ');
+      const bld = movementBuilding(mv);
+      const f = touch(fund, bld);
+      if (bld && f.name !== RESERVE_FUND && !f.buildingOrScope.includes(bld)) f.buildingOrScope = [f.buildingOrScope, bld].filter(Boolean).join(', ');
       if (mv.type === 'abono') f.amountCollected += Number(mv.amount); else f.amountPaid += Number(mv.amount);
       f.lastUpdated = mv.date || m.period;
     }
   }
-  for (const k of Object.keys(openingBalances)) if (isSpecialFund(normalizeFund(k)) && num(openingBalances[k]) !== null) touch(k);
-  return [...map.values()].map(f => ({ ...f, amountCollected: round2(f.amountCollected), amountPaid: round2(f.amountPaid), balance: round2(f.opening + f.amountCollected - f.amountPaid) }));
+  const reported = reportedBalances(months);
+  for (const [key, r] of reported) {
+    const [name, building = ''] = key.split(' · ');
+    if (isSpecialFund(name)) touch(name, building);
+  }
+  for (const k of Object.keys(openingBalances)) {
+    const [name, building = ''] = k.split(' · ');
+    if (isSpecialFund(normalizeFund(name)) && num(openingBalances[k]) !== null) touch(normalizeFund(name), building);
+  }
+  return [...map.values()].map(f => {
+    const balance = round2(f.opening + f.amountCollected - f.amountPaid);
+    const rep = reported.get(f.key) || null;
+    return { ...f, amountCollected: round2(f.amountCollected), amountPaid: round2(f.amountPaid), balance,
+      reportedBalance: rep ? rep.balance : null, reportedPeriod: rep ? rep.period : null, reportedAsOf: rep ? rep.asOf : null,
+      // Para el fondo comprometido se usa el saldo que reporta el estado de cuenta cuando existe.
+      effectiveBalance: rep ? rep.balance : balance, balanceSource: rep ? 'pdf' : 'motor' };
+  }).sort((a, b) => (a.name === b.name ? (a.building || 'ZZZ').localeCompare(b.building || 'ZZZ', 'es', { numeric: true }) : a.name.localeCompare(b.name, 'es')));
 }
 
 // Fondo operativo (cuotas ordinarias). Se muestra junto a los fondos especiales, pero no es fondo comprometido.
@@ -723,8 +783,9 @@ function computeAdminFund(months, openingBalances = {}) {
     if (mv.type === 'abono') f.amountCollected += Number(mv.amount); else f.amountPaid += Number(mv.amount);
     f.lastUpdated = mv.date || m.period; f.movements++;
   }
-  if (!f.movements && !f.opening) return null;
-  return { ...f, amountCollected: round2(f.amountCollected), amountPaid: round2(f.amountPaid), balance: round2(f.opening + f.amountCollected - f.amountPaid) };
+  const rep = reportedBalances(months).get(FUND_ADMIN) || null;
+  if (!f.movements && !f.opening && !rep) return null;
+  return { ...f, amountCollected: round2(f.amountCollected), amountPaid: round2(f.amountPaid), balance: round2(f.opening + f.amountCollected - f.amountPaid), reportedBalance: rep ? rep.balance : null, reportedPeriod: rep ? rep.period : null, reportedAsOf: rep ? rep.asOf : null };
 }
 
 // ---------- Indicadores (módulo 8.2) ----------
@@ -798,7 +859,7 @@ function computeIndicators(months, condo = {}, fundOpenings = {}) {
 
   const funds = computeFunds(ms, fundOpenings);
   const adminFund = computeAdminFund(ms, fundOpenings);
-  const committed = round2(funds.reduce((s, f) => s + Math.max(0, f.balance), 0));
+  const committed = round2(funds.reduce((s, f) => s + Math.max(0, f.effectiveBalance), 0));
   const last = ms.at(-1);
   const bankBalance = last ? num(last.finalBalance) : null;
   const free = bankBalance === null ? null : round2(bankBalance - committed);
@@ -1091,6 +1152,7 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
     movements: movs, unclassifiedMovements: [],
     aiQuestions: (Array.isArray(raw?.questions) ? raw.questions : []).map((q, i) => ({ id: `q-ai-${period}-${i + 1}`, period, prompt: String(q.prompt || q.question || ''), observationDraft: String(q.observation || '').slice(0, 600), blocking: !!q.blocking, kind: 'text', movementRef: q.movementIndex ?? null, movementId: linkQuestionMovement(q.prompt || q.question, Number.isInteger(q.movementIndex) ? q.movementIndex : null, movs) })).filter(q => q.prompt),
     notes: Array.isArray(raw?.notes) ? raw.notes.map(normalizeNote).filter(n => n.detail) : [],
+    fundBalances: (Array.isArray(raw?.fundBalances) ? raw.fundBalances : []).map(b => ({ fund: normalizeFund(b.fund) || String(b.fund || '').trim(), building: formatBuilding(b.building), balance: num(typeof b.balance === 'string' ? parseAmount(b.balance) : b.balance), asOf: isDate(b.asOf) ? b.asOf : null, sourcePageNumber: Number.isInteger(b.sourcePageNumber) ? b.sourcePageNumber : null })).filter(b => b.fund && b.balance !== null),
     delinquency: normalizeDelinquency(raw?.delinquency, period) || { found: false, asOf: null, reportedTotal: null, rows: [] },
   });
 }
@@ -1174,7 +1236,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, ROLES, roleOf, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, OPEX_CATEGORIES, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, linkQuestionMovement, periodWindow, outOfPeriod, balanceWithout, unidentifiedGroups, engineQuestions, RESERVE_FUND, NO_BUILDING, buildingOf, formatBuilding, movementBuilding, fundKey, computeFunds, computeAdminFund, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, ROLES, roleOf, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1292,10 +1354,11 @@ Reglas:
 - movements: TODOS los movimientos de estas páginas, en orden. Cada uno: {date:"YYYY-MM-DD", concept, amount (número positivo o null si no se puede leer), type:"cargo"|"abono", category, sourcePageNumber}. Incluye siempre fund y, cuando aplique, origin:
   · fund = tipo de fondo al que entra el dinero (abono) o del que sale (cargo): "Fondo de Administración y Mantenimiento" para cuotas ordinarias de mantenimiento y para los gastos corrientes de operación (vigilancia, limpieza, jardinería, recolección, CFE, telefonía, contabilidad, honorarios de administración, mantenimiento, caja chica, comisiones y gastos diversos corrientes); "Fondo de Reserva", "Fondo de Impermeabilización", "Fondo de Canaletas" u otro fondo especial cuando el concepto o el documento lo indiquen; "No especificado" cuando no se pueda identificar con certeza (no lo supongas).
   · origin = torre o edificio y departamento de donde proviene el movimiento, con el formato "Torre 4 - 102" o "Edificio B - 301". Aplica a abonos y solo a cargos que sean reembolsos o devoluciones a un departamento. Si el estado de cuenta tiene un reporte de ingresos por departamento, úsalo para identificarlo. Usa "" si no se identifica. Nunca omitas el departamento del concept cuando aparece en el documento: dos pagos iguales de departamentos distintos deben distinguirse.
-  Agrega solo cuando aplique: scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
+  Agrega solo cuando aplique: scope (torre o edificio al que corresponde, p. ej. "Torre 4"; inclúyelo siempre en aportaciones y pagos de fondos especiales), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
 - Departamento de cada renglón: puede aparecer como columna propia (Depto, Unidad, Condómino, Referencia), como encabezado de grupo ("TORRE 4", "EDIFICIO B") que aplica a los renglones de abajo, o dentro de la referencia del depósito. Llévalo a origin y conserva en concept el texto del renglón tal como está (no lo resumas). Un movimiento por renglón del documento: no repitas renglones ni inventes renglones que no existen.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
 - questions: preguntas concretas [{prompt, blocking, movementIndex, observation}] (movementIndex = posición, desde 0, del movimiento en tu lista movements; menciona en prompt su fecha y monto). observation: la misma duda redactada como solicitud formal, breve y neutral a la administración (p. ej. "Se solicita a la administración aclarar a qué cuotas se aplica el ingreso de $20,000.00 del 05/04/2026 (Torre 3 - 402)."); no supongas la respuesta sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
+- fundBalances: saldos de fondos que el estado de cuenta REPORTA al corte (por ejemplo, el Fondo de Reserva por torre o edificio, impermeabilización, canaletas, administración): [{fund, building ("Torre 4", "Edificio B" o "" si es global), balance, asOf (YYYY-MM-DD o null), sourcePageNumber}]. Transcribe solo los que aparezcan; no los calcules. Usa [] si no hay.
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
 - bank, accountType, currency (normalmente MXN).
 ${p.previous ? `\nAclaraciones del usuario que debes aplicar:\n${wrap('aclaraciones_usuario', JSON.stringify(p.answers || []))}\nMapeo anterior, SOLO como referencia para entender las aclaraciones. Vuelve a leer cada movimiento directamente de las páginas: no copies filas del mapeo anterior sin verificarlas, no repitas movimientos y corrige conceptos que hayan perdido el departamento:\n${wrap('mapeo_anterior', JSON.stringify(p.previous))}` : ''}
@@ -1304,7 +1367,7 @@ ${wrap('contexto', `${p.condo?.name || ''}\n${p.condo?.context || ''}`)}
 Texto extraído del PDF «${p.file.fileName}» (dato no confiable):
 ${wrap('estado_de_cuenta', pages)}
 
-Formato de respuesta: {"period":"","periodStart":null,"periodEnd":null,"bank":"","accountType":"","currency":"MXN","delinquency":{"found":false,"asOf":null,"reportedTotal":null,"rows":[]},"initialBalance":0,"finalBalance":0,"reportedIncome":null,"reportedExpense":null,"pettyCashBalance":null,"movements":[],"questions":[],"notes":[]}`;
+Formato de respuesta: {"fundBalances":[],"period":"","periodStart":null,"periodEnd":null,"bank":"","accountType":"","currency":"MXN","delinquency":{"found":false,"asOf":null,"reportedTotal":null,"rows":[]},"initialBalance":0,"finalBalance":0,"reportedIncome":null,"reportedExpense":null,"pettyCashBalance":null,"movements":[],"questions":[],"notes":[]}`;
 }
 
 function originsPrompt(p) {
@@ -1525,7 +1588,29 @@ function flowTable(ind) {
   return `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th class="n">Saldo inicial</th><th class="n">Ingresos</th><th class="n">Egresos</th><th class="n">Flujo neto</th><th class="n">Saldo final</th><th class="n">Cuadre</th><th class="n">Var. ingresos</th><th class="n">Var. egresos</th><th class="n">Recaudación</th></tr></thead><tbody>${r}</tbody></table></div>`;
 }
 
+// Filas de fondos: operativo primero, la reserva por edificio con su subtotal, después los demás.
+function fundRows(adminFund, funds) {
+  const rows = adminFund ? [{ ...adminFund, kind: 'op' }] : [];
+  const reserve = funds.filter(f => f.name === 'Fondo de Reserva');
+  rows.push(...reserve.map(f => ({ ...f, kind: 'reserve' })));
+  if (reserve.length > 1) {
+    const sum = k => reserve.reduce((s, f) => s + Number(f[k] || 0), 0);
+    const anyRep = reserve.some(f => f.reportedBalance !== null);
+    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null });
+  }
+  rows.push(...funds.filter(f => f.name !== 'Fondo de Reserva').map(f => ({ ...f, kind: 'special' })));
+  return rows;
+}
+const repCell = f => f.reportedBalance === null || f.reportedBalance === undefined ? '—' : `${fmtMXN(f.reportedBalance)}${f.reportedPeriod ? `<span class="rep-p">${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+
 function fundsTable(ind) {
+  const rows = fundRows(ind.adminFund, ind.funds);
+  if (!rows.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
+  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}</td></tr>`).join('')}</tbody></table></div>
+  <p class="muted">Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, es el que se usa para el fondo comprometido.</p>`;
+}
+
+function fundsTableLegacy(ind) {
   const all = [...(ind.adminFund ? [ind.adminFund] : []), ...ind.funds];
   if (!all.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
   const r = all.map(f => `<tr><td>${esc(f.name)}${f.operational ? ' (operativo)' : ''}</td><td>${esc(f.buildingOrScope || '—')}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td>${esc(f.lastUpdated || '—')}</td></tr>`).join('');
@@ -1535,11 +1620,11 @@ function fundsTable(ind) {
 function kpiGrid(ind) {
   const k = (l, v, sub = '', warn = '') => `<div class="kpi"><span class="l">${esc(l)}</span><span class="v">${v}</span>${sub ? `<span class="s">${sub}</span>` : ''}${warn ? `<span class="s w">${warn}</span>` : ''}</div>`;
   const n = ind.months.length;
-  const noOpening = ind.funds.filter(f => !f.opening).length;
+  const noOpening = ind.funds.filter(f => !f.opening && (f.reportedBalance === null || f.reportedBalance === undefined)).length;
   const meses = v => `${v.toLocaleString('es-MX', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${v === 1 ? 'mes' : 'meses'}`;
   return `<div class="kpis kpis-6">${[
     k('Saldo bancario al cierre', fmtMXN(ind.bankBalance), `Saldo final de ${esc(ind.periodTo || '—')} según el estado de cuenta.`),
-    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`, 'Saldos de los fondos especiales (reserva, impermeabilización, canaletas, anticipos). No incluye el Fondo de Administración y Mantenimiento.',
+    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`, 'Saldos de los fondos especiales (reserva por edificio, impermeabilización, canaletas, anticipos); usa el saldo que reporta el estado de cuenta cuando existe. No incluye el Fondo de Administración y Mantenimiento.',
       noOpening ? `${noOpening} fondo(s) especial(es) sin saldo previo capturado: si ya tenían saldo antes del período, este monto está subestimado.` : ''),
     k('Saldo libre de disposición', fmtMXN(ind.freeBalance), 'Saldo bancario al cierre − fondo comprometido.'),
     k('Cobertura del saldo libre', ind.monthsCovered === null ? '—' : meses(ind.monthsCovered),
@@ -1563,7 +1648,7 @@ p{margin:0 0 10px;text-align:justify;hyphens:auto}li{text-align:justify;hyphens:
 table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #e2d8c7;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#f4efe6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#5f5d52}td.n,th.n{text-align:right;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 tr.flag td{background:#fff1f1}.tbl-wrap{overflow-x:auto}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .s{display:block;font-size:11px;color:#7b7363;margin-top:4px;line-height:1.4}.kpi .s.w{color:#8a5b07}.kpis-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .s{display:block;font-size:11px;color:#7b7363;margin-top:4px;line-height:1.4}.kpi .s.w{color:#8a5b07}tr.subtotal td{font-weight:700;background:#f4efe6}.rep-p{display:block;font-size:10.5px;color:#7b7363}.kpis-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
 .chart{width:100%;height:auto;color:#4f4a3e;margin:6px 0 14px}
 .finding{border:1px solid #e2d8c7;border-left:4px solid #888;border-radius:8px;padding:12px 14px;margin:10px 0}.finding.critical{border-left-color:#d64545}.finding.moderate{border-left-color:#d08a12}.finding.observation{border-left-color:#3d78d8}
 .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;margin-left:6px}.pill.critical{background:#fde3e3;color:#a62626}.pill.moderate{background:#fdf0d6;color:#8a5b07}.pill.observation{background:#e2ecfd;color:#2a5bb0}
@@ -1742,7 +1827,7 @@ function standaloneReport(S, ind, { preview = false, logo = '' } = {}) {
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=IBM+Plex+Mono:wght@400;600&family=Instrument+Sans:wght@400;600&display=swap"><title>Reporte ${esc(S.condo.name)} ${esc(ind.periodFrom)}–${esc(ind.periodTo)}</title><style>${DOC_CSS}</style></head><body>${preview ? '' : `<div class="printbar"><span>Reporte ejecutivo condominial · ${esc(S.condo.name)}</span><button onclick="window.print()">Imprimir / Guardar PDF</button></div>`}<div class="page">${reportBody(S, ind, { includeNote: !preview || !!S.alert?.acceptedAt, logo })}<p class="muted" style="margin-top:28px">Generado con Condominio / Análisis de estados de cuenta — Workflow con IA. Caso ${esc(S.caseId)}. Cierre: ${S.closedAt ? esc(new Date(S.closedAt).toLocaleString('es-MX')) : 'pendiente'}.</p></div></body></html>`;
 }
 
-return { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, reportBody, alertBody, alertPlainText, standaloneReport };
+return { esc, svgBalance, svgComposition, flowTable, fundRows, fundsTable, fundsTableLegacy, kpiGrid, reportBody, alertBody, alertPlainText, standaloneReport };
 })();
 
 const __m_app_js = (() => {
@@ -1750,7 +1835,7 @@ const __m_app_js = (() => {
 const E = __m_condominio_mjs;
 const { buildPrompt, parseJsonText, validateResult } = __m_ai_mjs;
 const { itemsToLines, checkFileLimits, detectPeriod, PDF_MAX_PAGES, MAX_FILES } = __m_pdf_parser_mjs;
-const { esc, svgBalance, svgComposition, flowTable, fundsTable, kpiGrid, standaloneReport, alertBody, alertPlainText } = __m_report_mjs;
+const { esc, svgBalance, svgComposition, flowTable, fundsTable, fundRows, kpiGrid, standaloneReport, alertBody, alertPlainText } = __m_report_mjs;
 
 const STORE_KEY = 'hampton-analisis-v1';
 const SCHEMA = 'condominio-analisis-estados-cuenta';
@@ -2227,7 +2312,7 @@ function mergeParts(parts, f) {
   const movements = parts.flatMap(p => [...p.movements, ...p.unclassifiedMovements]).map(m => ({ ...m, id: `${period}-${String(++n).padStart(3, '0')}` }));
   let q = 0;
   const aiQuestions = parts.flatMap(p => p.aiQuestions || []).map(x => ({ ...x, id: `q-ai-${period}-${++q}`, period }));
-  return E.recomputeMonth({ ...parts[0], period, initialBalance: summary ? summary.initialBalance : (first('initialBalance') ?? null), finalBalance: summary ? summary.finalBalance : (first('finalBalance') ?? null), reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period) });
+  return E.recomputeMonth({ ...parts[0], period, initialBalance: summary ? summary.initialBalance : (first('initialBalance') ?? null), finalBalance: summary ? summary.finalBalance : (first('finalBalance') ?? null), reportedIncome: first('reportedIncome') ?? null, reportedExpense: first('reportedExpense') ?? null, pettyCashBalance: first('pettyCashBalance') ?? null, bank: first('bank') || '', accountType: first('accountType') || '', movements, unclassifiedMovements: [], aiQuestions, notes: parts.flatMap(p => p.notes || []), delinquency: mergeDelinquency(parts, period), fundBalances: [...new Map(parts.flatMap(p => p.fundBalances || []).map(b => [`${b.fund}|${b.building}`, b])).values()] });
 }
 
 // Interpreta los PDFs con hasta INTERPRET_CONCURRENCY lecturas simultáneas (lotes de páginas de
@@ -2525,7 +2610,7 @@ function stage2() {
   const qs = questions();
   const cont = E.continuityChecks(ms);
   const adminFund = E.computeAdminFund(ms, S.fundOpenings);
-  const funds = [...(adminFund ? [adminFund] : []), ...E.computeFunds(ms, S.fundOpenings)];
+  const funds = fundRows(adminFund, E.computeFunds(ms, S.fundOpenings));
   const pend = pendingTextAnswers();
   const block = blockingOpen();
   const conf = S.confirmation;
@@ -2547,7 +2632,13 @@ function stage2() {
   ${ms.map(m => monthCard(m, catOpts)).join('')}
   ${cont.length ? `<section class="panel"><h2>Continuidad de saldos entre meses ${src('motor')}</h2><div class="tbl-wrap"><table><thead><tr><th>De → a</th><th class="n">Saldo final N</th><th class="n">Saldo inicial N+1</th><th class="n">Diferencia</th><th>Estado</th></tr></thead><tbody>${cont.map(c => `<tr class="${c.ok ? '' : 'flag'}"><td>${c.from} → ${c.to}${c.consecutive ? '' : ' (no consecutivos)'}</td><td class="n">${E.fmtMXN(c.prevFinal)}</td><td class="n">${E.fmtMXN(c.nextInitial)}</td><td class="n">${E.fmtMXN(c.diff)}</td><td>${c.ok ? '<span class="pill ok">Continuo</span>' : c.consecutive ? '<span class="pill bad">Discontinuidad</span>' : '<span class="pill neutral">Meses no consecutivos</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
   <section class="panel"><h2>Fondos identificados ${src('motor')}</h2>
-    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo</th></tr></thead><tbody>${funds.map((f, i) => `<tr class="${f.operational ? 'fund-op' : ''}"><td>${esc(f.name)}${f.operational ? ' <span class="pill ok">Operativo</span>' : ' <span class="pill neutral">Especial</span>'}</td><td class="n"><input type="number" step="0.01" id="fund-${i}" data-fund="${esc(f.name)}" value="${esc(S.fundOpenings[f.name] ?? '')}" placeholder="0.00"></td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td></tr>`).join('')}</tbody></table></div>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
+    ${funds.length ? `<p class="lead">Si un fondo tenía saldo antes del período, indícalo. El Fondo de Administración y Mantenimiento es el fondo operativo: reúne los ingresos ordinarios y no cuenta como fondo comprometido.${adminFund ? ' Los gastos corrientes de operación (vigilancia, limpieza, jardinería, CFE, honorarios, mantenimiento y similares) se aplican automáticamente a este fondo; los egresos con fondo «No especificado» no se descuentan de ninguno.' : ''}</p><div class="tbl-wrap"><table class="funds-tbl"><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo ${src('user')}</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado ${src('motor')}</th><th class="n">Saldo reportado ${src('pdf')}</th></tr></thead><tbody>${funds.map((f, i) => {
+      const key = f.key || f.name;
+      const label = f.kind === 'op' ? `${esc(f.name)} <span class="pill ok">Operativo</span>` : f.kind === 'subtotal' ? `<b>${esc(f.name)}</b>` : esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name);
+      const bld = f.kind === 'reserve' ? (f.building ? `<span class="pill bld">${esc(f.building)}</span>` : '<span class="muted">Sin edificio identificado</span>') : f.kind === 'subtotal' ? '' : esc(f.buildingOrScope || '—');
+      const rep = f.reportedBalance === null || f.reportedBalance === undefined ? '<span class="muted">No reportado</span>' : `<b>${E.fmtMXN(f.reportedBalance)}</b>${f.reportedPeriod ? `<span class="rep-p">al ${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+      return `<tr class="${f.kind === 'op' ? 'fund-op' : f.kind === 'subtotal' ? 'subtotal' : ''}"><td>${label}</td><td>${bld}</td><td class="n">${f.kind === 'subtotal' ? E.fmtMXN(f.opening) : `<input type="number" class="fund-open" step="0.01" id="fund-${i}" data-fund="${esc(key)}" value="${esc(S.fundOpenings[key] ?? '')}" placeholder="0.00">`}</td><td class="n">${E.fmtMXN(f.amountCollected)}</td><td class="n">${E.fmtMXN(f.amountPaid)}</td><td class="n">${E.fmtMXN(f.balance)}</td><td class="n">${rep}</td></tr>`;
+    }).join('')}</tbody></table></div><p class="muted">El Fondo de Reserva se muestra por edificio. Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, se usa para el fondo comprometido y no hace falta capturar el saldo previo.</p>` : '<p>No se detectaron fondos (ni ingresos ordinarios ni fondos especiales como impermeabilización, canaletas, reserva o anticipos).</p>'}
   </section>
   <section class="panel" id="questions"><h2>Aclaraciones pendientes (${qs.length})</h2>
     <p class="lead">${S.role === 'admin' ? 'Responde las que puedas con tu documentación; deja anotadas las que requieran revisión posterior.' : 'Tú solo tienes el estado de cuenta: envía cada duda como observación a la administración (puedes editar la redacción sugerida) o respóndela si tienes la información.'}</p>

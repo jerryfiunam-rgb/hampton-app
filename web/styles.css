@@ -374,3 +374,14 @@ p, li, dd, .lead, .summary, .banner, .banner > span, .check > span, .rc-d, .kpi 
 .topbar, .topbar *, .drop, .drop * { text-align: center; }
 td, th { text-align: left; }
 td.n, th.n { text-align: right; }
+
+/* Fondos: subtotal de la reserva, edificio y fecha del saldo reportado */
+tr.subtotal td { background: var(--surface-3); font-weight: 600; }
+.pill.bld { background: var(--obs-soft); color: var(--obs); border-color: rgba(47,95,138,.3); }
+.rep-p { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400; }
+td input.fund-open { width: 104px; }
+#questions ~ * .fund-open, .fund-open { font-size: 12.5px; }
+tr.subtotal td:first-child, tr.fund-op td:first-child { min-width: 150px; }
+.funds-tbl th { white-space: normal; vertical-align: bottom; }
+.funds-tbl th .src { display: block; width: fit-content; margin: 3px 0 0 auto; }
+.funds-tbl td { padding: 8px 8px; }

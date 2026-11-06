@@ -66,7 +66,29 @@ export function flowTable(ind) {
   return `<div class="tbl-wrap"><table><thead><tr><th>Mes</th><th class="n">Saldo inicial</th><th class="n">Ingresos</th><th class="n">Egresos</th><th class="n">Flujo neto</th><th class="n">Saldo final</th><th class="n">Cuadre</th><th class="n">Var. ingresos</th><th class="n">Var. egresos</th><th class="n">Recaudación</th></tr></thead><tbody>${r}</tbody></table></div>`;
 }
 
+// Filas de fondos: operativo primero, la reserva por edificio con su subtotal, después los demás.
+export function fundRows(adminFund, funds) {
+  const rows = adminFund ? [{ ...adminFund, kind: 'op' }] : [];
+  const reserve = funds.filter(f => f.name === 'Fondo de Reserva');
+  rows.push(...reserve.map(f => ({ ...f, kind: 'reserve' })));
+  if (reserve.length > 1) {
+    const sum = k => reserve.reduce((s, f) => s + Number(f[k] || 0), 0);
+    const anyRep = reserve.some(f => f.reportedBalance !== null);
+    rows.push({ kind: 'subtotal', name: 'Fondo de Reserva — total', building: '', opening: sum('opening'), amountCollected: sum('amountCollected'), amountPaid: sum('amountPaid'), balance: sum('balance'), reportedBalance: anyRep ? sum('reportedBalance') : null });
+  }
+  rows.push(...funds.filter(f => f.name !== 'Fondo de Reserva').map(f => ({ ...f, kind: 'special' })));
+  return rows;
+}
+const repCell = f => f.reportedBalance === null || f.reportedBalance === undefined ? '—' : `${fmtMXN(f.reportedBalance)}${f.reportedPeriod ? `<span class="rep-p">${esc(f.reportedAsOf || f.reportedPeriod)}</span>` : ''}`;
+
 export function fundsTable(ind) {
+  const rows = fundRows(ind.adminFund, ind.funds);
+  if (!rows.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
+  return `<div class="tbl-wrap"><table><thead><tr><th>Fondo</th><th>Edificio</th><th class="n">Saldo previo</th><th class="n">Recaudado</th><th class="n">Aplicado</th><th class="n">Saldo calculado</th><th class="n">Saldo reportado <span class="src pdf">PDF</span></th></tr></thead><tbody>${rows.map(f => `<tr${f.kind === 'subtotal' ? ' class="subtotal"' : ''}><td>${esc(f.kind === 'reserve' ? 'Fondo de Reserva' : f.name)}${f.kind === 'op' ? ' (operativo)' : ''}</td><td>${esc(f.kind === 'reserve' ? (f.building || 'Sin edificio identificado') : (f.buildingOrScope || '—'))}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td class="n">${repCell(f)}</td></tr>`).join('')}</tbody></table></div>
+  <p class="muted">Saldo calculado = saldo previo + recaudado − aplicado en los meses analizados. Saldo reportado = el que muestra el estado de cuenta al corte; cuando existe, es el que se usa para el fondo comprometido.</p>`;
+}
+
+export function fundsTableLegacy(ind) {
   const all = [...(ind.adminFund ? [ind.adminFund] : []), ...ind.funds];
   if (!all.length) return '<p>No se identificaron fondos en los movimientos confirmados.</p>';
   const r = all.map(f => `<tr><td>${esc(f.name)}${f.operational ? ' (operativo)' : ''}</td><td>${esc(f.buildingOrScope || '—')}</td><td class="n">${fmtMXN(f.opening)}</td><td class="n">${fmtMXN(f.amountCollected)}</td><td class="n">${fmtMXN(f.amountPaid)}</td><td class="n">${fmtMXN(f.balance)}</td><td>${esc(f.lastUpdated || '—')}</td></tr>`).join('');
@@ -76,11 +98,11 @@ export function fundsTable(ind) {
 export function kpiGrid(ind) {
   const k = (l, v, sub = '', warn = '') => `<div class="kpi"><span class="l">${esc(l)}</span><span class="v">${v}</span>${sub ? `<span class="s">${sub}</span>` : ''}${warn ? `<span class="s w">${warn}</span>` : ''}</div>`;
   const n = ind.months.length;
-  const noOpening = ind.funds.filter(f => !f.opening).length;
+  const noOpening = ind.funds.filter(f => !f.opening && (f.reportedBalance === null || f.reportedBalance === undefined)).length;
   const meses = v => `${v.toLocaleString('es-MX', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${v === 1 ? 'mes' : 'meses'}`;
   return `<div class="kpis kpis-6">${[
     k('Saldo bancario al cierre', fmtMXN(ind.bankBalance), `Saldo final de ${esc(ind.periodTo || '—')} según el estado de cuenta.`),
-    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`, 'Saldos de los fondos especiales (reserva, impermeabilización, canaletas, anticipos). No incluye el Fondo de Administración y Mantenimiento.',
+    k('Fondo comprometido', `${fmtMXN(ind.committedFunds)}${ind.committedPct !== null ? ` · ${fmtPct(ind.committedPct)}` : ''}`, 'Saldos de los fondos especiales (reserva por edificio, impermeabilización, canaletas, anticipos); usa el saldo que reporta el estado de cuenta cuando existe. No incluye el Fondo de Administración y Mantenimiento.',
       noOpening ? `${noOpening} fondo(s) especial(es) sin saldo previo capturado: si ya tenían saldo antes del período, este monto está subestimado.` : ''),
     k('Saldo libre de disposición', fmtMXN(ind.freeBalance), 'Saldo bancario al cierre − fondo comprometido.'),
     k('Cobertura del saldo libre', ind.monthsCovered === null ? '—' : meses(ind.monthsCovered),
@@ -104,7 +126,7 @@ p{margin:0 0 10px;text-align:justify;hyphens:auto}li{text-align:justify;hyphens:
 table{border-collapse:collapse;width:100%;font-size:12.5px;margin:6px 0 12px}th,td{border-bottom:1px solid #e2d8c7;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#f4efe6;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#5f5d52}td.n,th.n{text-align:right;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
 tr.flag td{background:#fff1f1}.tbl-wrap{overflow-x:auto}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .s{display:block;font-size:11px;color:#7b7363;margin-top:4px;line-height:1.4}.kpi .s.w{color:#8a5b07}.kpis-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 14px}.kpi{border:1px solid #e2d8c7;border-radius:8px;padding:10px}.kpi .l{display:block;font-size:11.5px;color:#7b7363}.kpi .s{display:block;font-size:11px;color:#7b7363;margin-top:4px;line-height:1.4}.kpi .s.w{color:#8a5b07}tr.subtotal td{font-weight:700;background:#f4efe6}.rep-p{display:block;font-size:10.5px;color:#7b7363}.kpis-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.kpi .v{font-family:"IBM Plex Mono",monospace;font-size:15px}
 .chart{width:100%;height:auto;color:#4f4a3e;margin:6px 0 14px}
 .finding{border:1px solid #e2d8c7;border-left:4px solid #888;border-radius:8px;padding:12px 14px;margin:10px 0}.finding.critical{border-left-color:#d64545}.finding.moderate{border-left-color:#d08a12}.finding.observation{border-left-color:#3d78d8}
 .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;margin-left:6px}.pill.critical{background:#fde3e3;color:#a62626}.pill.moderate{background:#fdf0d6;color:#8a5b07}.pill.observation{background:#e2ecfd;color:#2a5bb0}
