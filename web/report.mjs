@@ -125,7 +125,7 @@ export function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
     return `<div class="finding ${esc(s.level)}"><h3>${i + 1}. ${esc(r.title || p.title)} <span class="pill ${esc(s.level)}">${LEVEL_LABEL[s.level]}</span> <span class="muted">(${esc(s.id)} · ${esc(catLabel(p.category))})</span></h3>
       ${para(r.narrative || p.description)}
       <p><b>Evidencia</b> <span class="src pdf">PDF</span></p>
-      <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td>${esc(m.date)}</td><td>${esc(m.concept)}</td><td>${esc(m.type)}</td><td class="n">${fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td>${esc(m.date)}</td><td>${esc(m.concept)}${m.origin ? ` (${esc(m.origin)})` : ''}</td><td>${esc(m.type)}</td><td class="n">${fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>
       ${r.evidenceSummary ? para(r.evidenceSummary) : ''}
       ${hyps.length ? `<p><b>Hipótesis aceptadas por el revisor</b> <span class="src user">Usuario</span></p><ul>${hyps.map(h => `<li>${esc(h.text)}</li>`).join('')}</ul>` : ''}
       <p><b>Recomendación</b> <span class="src ia">IA</span></p>${para(r.recommendation || p.recommendation || 'Sin recomendación cuantificada: los datos son insuficientes.')}

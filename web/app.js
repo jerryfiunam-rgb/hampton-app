@@ -63,7 +63,18 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); storageOk = true; }
   catch { storageOk = false; }
 }
-let S = load() || fresh();
+// Casos guardados con versiones anteriores: unifica nombres de fondo y deduce el origen.
+function migrate(st) {
+  for (const m of st.months || []) for (const list of ['movements', 'unclassifiedMovements']) for (const mv of m[list] || []) {
+    mv.fund = E.resolveFund(mv.fund, mv.category, mv.concept);
+    if (mv.origin === undefined) mv.origin = (mv.type === 'abono' || /REEMBOLSO|DEVOLUCION|REINTEGRO/.test(E.normText(mv.concept))) ? E.extractOrigin(`${mv.concept || ''} ${mv.sourceText || ''}`) : '';
+  }
+  const fo = {};
+  for (const [k, v] of Object.entries(st.fundOpenings || {})) if (v !== undefined && v !== null && v !== '') fo[E.normalizeFund(k) || k] = v;
+  st.fundOpenings = fo;
+  return st;
+}
+let S = migrate(load() || fresh());
 const restored = S.events.length > 0;
 
 function log(type, detail = '') { S.events.push({ at: now(), type, detail: String(detail).slice(0, 300) }); save(); }
@@ -491,14 +502,14 @@ async function runInterpret(onlyIds = null) {
   save(); render();
   return failures.length === 0;
 }
-const slimMonth = m => ({ period: m.period, initialBalance: m.initialBalance, finalBalance: m.finalBalance, movements: [...m.movements, ...m.unclassifiedMovements].map(x => ({ date: x.date, concept: x.concept, amount: x.amount, type: x.type, category: x.category, sourcePageNumber: x.sourcePageNumber, fund: x.fund })) });
+const slimMonth = m => ({ period: m.period, initialBalance: m.initialBalance, finalBalance: m.finalBalance, movements: [...m.movements, ...m.unclassifiedMovements].map(x => ({ date: x.date, concept: x.concept, amount: x.amount, type: x.type, category: x.category, sourcePageNumber: x.sourcePageNumber, fund: x.fund, origin: x.origin })) });
 
 async function runAnalyze() {
   errors.analyze = null;
   const ms = months();
   const ind = indicators();
   const anomalies = E.detectAnomalies(ms, ind);
-  const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
+  const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, origin: m.origin || undefined, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
   try {
     const delinquency = E.delinquencyRows(ms).map(r => ({ id: r.id, period: r.period, unit: r.unit, amount: r.amount, months: r.months }));
     const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency }, 'analyze');
@@ -624,7 +635,7 @@ function restoreJSON(text) {
   n.selectionConfirmedAt = null;
   n.events = [...(j.events || []), { at: now(), type: 'restauración', detail: 'Copia JSON restaurada: se requiere renovar consentimiento, confirmación de datos y aprobaciones.' }];
   n.stage = n.months.length ? 2 : 1;
-  S = n; save(); render();
+  S = migrate(n); save(); render();
 }
 
 // ---------- Render ----------
@@ -777,8 +788,8 @@ function monthCard(m, catOpts) {
     </div>
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
-    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
+    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -795,6 +806,17 @@ function notesView(raw) {
   const count = k => notes.filter(n => n.kind === k).length;
   return `<details class="notes" ${count('inconsistencia') ? 'open' : ''}><summary><span class="notes-t">Observaciones de Claude sobre la lectura ${src('ia')}</span><span class="notes-c">${groups.map(([k, v, g]) => `<span class="nk ${k}">${g.length} ${g.length === 1 ? v.one : v.many}</span>`).join('')}</span></summary>
     <div class="notes-b">${groups.map(([k, v, g]) => `<section class="ng ${k}"><h4>${esc(v.label)}</h4><ul>${g.map(n => `<li>${n.title ? `<strong>${esc(n.title)}</strong>` : ''}<p>${hlAmounts(n.detail)}</p></li>`).join('')}</ul></section>`).join('')}</div></details>`;
+}
+
+// Celdas editables de la tabla de movimientos.
+function originCell(x) {
+  const applies = x.type === 'abono' || x.origin || /REEMBOLSO|DEVOLUCION|REINTEGRO/.test(E.normText(x.concept));
+  if (!applies) return '<span class="muted">—</span>';
+  return `<input type="text" class="origin-in ${x.origin ? '' : 'empty'}" id="org-${esc(x.id)}" data-origin="${esc(x.id)}" value="${esc(x.origin || '')}" placeholder="No identificado" maxlength="40" aria-label="Origen de ${esc(x.concept)}">`;
+}
+function fundCell(x) {
+  const opts = E.FUND_OPTIONS.includes(x.fund) ? E.FUND_OPTIONS : [x.fund, ...E.FUND_OPTIONS];
+  return `<select class="fund-sel ${x.fund === E.FUND_NONE ? 'none' : x.fund === E.FUND_ADMIN ? 'admin' : 'special'}" id="fnd-${esc(x.id)}" data-mvfund="${esc(x.id)}" aria-label="Tipo de fondo de ${esc(x.concept)}">${opts.map(o => `<option ${o === x.fund ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
 }
 
 function delinquencyMonth(m) {
@@ -904,7 +926,7 @@ function findingCard(f, { selectable = false, selected = false } = {}) {
   const interp = f.interpretation || f.description;
   const row = (k, label, body) => body ? `<div class="frow ${k}"><span class="flabel">${label}</span><div class="fbody">${body}</div></div>` : '';
   return `<article class="finding ${esc(f.level)} ${selected ? 'sel' : ''}"><div class="hd"><span class="pill ${esc(f.level)}">${E.LEVEL_LABEL[f.level]}</span><h3>${esc(f.title)}</h3><span class="mono" style="font-size:12px;color:var(--ink-3)">${esc(f.id)} · ${esc(E.catLabel(f.category))}</span></div>
-  ${row('fact', 'Hechos', `${facts.length ? `<ul>${facts.map(t => `<li>${hlAmounts(t)}</li>`).join('')}</ul>` : ''}${ev.length ? `<div class="tbl-wrap evt"><table><thead><tr><th>Fecha</th><th>Movimiento ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td class="mono">${esc(m.date)}</td><td>${esc(m.concept)}</td><td>${esc(m.type)}</td><td class="n">${E.fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>` : ''}`)}
+  ${row('fact', 'Hechos', `${facts.length ? `<ul>${facts.map(t => `<li>${hlAmounts(t)}</li>`).join('')}</ul>` : ''}${ev.length ? `<div class="tbl-wrap evt"><table><thead><tr><th>Fecha</th><th>Movimiento ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td class="mono">${esc(m.date)}</td><td>${esc(m.concept)}${m.origin ? ` <span class="pill neutral">${esc(m.origin)}</span>` : ''}</td><td>${esc(m.type)}</td><td class="n">${E.fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>` : ''}`)}
   ${row('interp', 'Interpretación', interp ? `<p>${hlAmounts(interp)}</p>` : '')}
   ${row('hyp', 'Hipótesis', (f.hypotheses || []).length ? `<ul>${f.hypotheses.map(h => `<li>${hlAmounts(h.text)}${h.quantified ? ' <span class="pill neutral">cuantificada</span>' : ''}</li>`).join('')}</ul>` : '')}
   ${row('impact', 'Impacto posible', f.impact ? `<p>${hlAmounts(f.impact)}</p>` : '')}
@@ -1152,6 +1174,8 @@ document.addEventListener('change', e => {
   if (t.dataset.bind) return render();
   if (t.dataset.check) { S._checks[t.dataset.check] = t.checked; save(); return render(); }
   if (t.dataset.cat) return changeMovement(t.dataset.cat, { category: t.value }, true);
+  if (t.dataset.mvfund) return changeMovement(t.dataset.mvfund, { fund: t.value }, false, 'Tipo de fondo asignado por el usuario');
+  if (t.dataset.origin !== undefined) return changeMovement(t.dataset.origin, { origin: E.formatOrigin(t.value) }, false, 'Origen capturado por el usuario');
   if (t.dataset.qcat && t.value) return changeMovement(t.dataset.qcat, { category: t.value }, false, 'Respuesta a aclaración');
   if ((t.dataset.amt || t.dataset.qamt) && t.value !== '') return changeMovement(t.dataset.amt || t.dataset.qamt, { amount: Math.abs(Number(t.value)) }, false, 'Monto no identificado capturado por el usuario');
   if (t.dataset.qbal && t.value !== '') { const [p, f] = t.dataset.qbal.split('|'); return changeBalance(p, f, t.value); }
@@ -1168,9 +1192,11 @@ function changeMovement(id, patch, askWhy, why = '') {
   for (const m of S.months) for (const list of ['movements', 'unclassifiedMovements']) {
     const mv = m[list].find(x => x.id === id);
     if (!mv) continue;
-    const before = { category: mv.category, amount: mv.amount };
+    const before = { category: mv.category, amount: mv.amount, fund: mv.fund, origin: mv.origin };
     Object.assign(mv, patch);
-    const what = patch.category ? `${mv.date} «${mv.concept}»: ${E.catLabel(before.category)} → ${E.catLabel(patch.category)}` : `${mv.date} «${mv.concept}»: monto ${E.fmtMXN(patch.amount)}`;
+    const what = 'fund' in patch ? `${mv.date} «${mv.concept}»: fondo ${before.fund || E.FUND_NONE} → ${patch.fund}`
+      : 'origin' in patch ? `${mv.date} «${mv.concept}»: origen ${before.origin || 'no identificado'} → ${patch.origin || 'no identificado'}`
+      : patch.category ? `${mv.date} «${mv.concept}»: ${E.catLabel(before.category)} → ${E.catLabel(patch.category)}` : `${mv.date} «${mv.concept}»: monto ${E.fmtMXN(patch.amount)}`;
     const entry = { at: now(), period: m.period, movementId: id, what, why };
     S.corrections.push(entry);
     Object.assign(m, E.recomputeMonth(m));

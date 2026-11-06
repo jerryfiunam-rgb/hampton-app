@@ -330,6 +330,18 @@ main { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scroll-pad
 .pf-st.err { color: var(--crit); }
 .pcalls li { font-size: 11.5px; color: var(--ink-3); font-family: var(--f-mono); overflow-wrap: anywhere; }
 
+/* Tabla de movimientos: tipo en color, origen y tipo de fondo */
+.pill.abono { background: var(--ivy-soft); color: var(--ivy); border-color: rgba(76,100,32,.35); }
+.pill.cargo { background: rgba(179,38,30,.09); color: #a3261f; border-color: rgba(179,38,30,.3); }
+td .origin-in { width: 128px; padding: 5px 8px; font-size: 12.5px; font-family: var(--f-mono); }
+td .origin-in.empty { background: rgba(196,128,0,.06); border-style: dashed; }
+td select.fund-sel { min-width: 0; width: 196px; font-size: 12.5px; }
+td select.fund-sel.none { color: var(--ink-3); border-style: dashed; }
+td select.fund-sel.special { border-color: var(--obs); }
+td.mono:first-child { white-space: nowrap; }
+td select.fund-sel { width: 176px; }
+.month td select[data-cat] { min-width: 0; width: 180px; }
+
 </style>
 <div id="app"><p style="padding:24px">Cargando aplicación…</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -398,14 +410,59 @@ function suggestCategory(concept, type) {
   return 'NO_CLASIFICADO';
 }
 
+// ---------- Tipo de fondo y origen de cada movimiento ----------
+const FUND_ADMIN = 'Fondo de Administración';
+const FUND_NONE = 'No especificado';
+const FUND_OPTIONS = [FUND_ADMIN, 'Fondo de Reserva', 'Fondo de Impermeabilización', 'Fondo de Canaletas', 'Anticipos de condóminos', FUND_NONE];
+// Fondos que se tratan como recursos comprometidos (no el operativo ni el no especificado).
+const isSpecialFund = f => !!f && f !== FUND_ADMIN && f !== FUND_NONE;
+
+// Unifica el nombre de un fondo escrito de distintas formas.
+function normalizeFund(name) {
+  const t = normText(name);
+  if (!t || /^(NULL|NINGUNO|N\/A|NO ESPECIFICADO|DESCONOCIDO|SIN FONDO)$/.test(t)) return null;
+  if (/ADMINISTRACION|OPERACION|ORDINARI/.test(t)) return FUND_ADMIN;
+  if (t.includes('IMPERMEAB')) return 'Fondo de Impermeabilización';
+  if (t.includes('CANALETA')) return 'Fondo de Canaletas';
+  if (t.includes('RESERVA')) return 'Fondo de Reserva';
+  if (t.includes('ANTICIPO')) return 'Anticipos de condóminos';
+  return String(name).trim().slice(0, 60);
+}
+
 function detectFund(concept) {
   const t = normText(concept);
-  if (t.includes('IMPERMEAB')) return 'Impermeabilización';
-  if (t.includes('CANALETA')) return 'Canaletas';
-  if (t.includes('RESERVA')) return 'Fondo de reserva';
+  if (t.includes('IMPERMEAB')) return 'Fondo de Impermeabilización';
+  if (t.includes('CANALETA')) return 'Fondo de Canaletas';
+  if (t.includes('RESERVA')) return 'Fondo de Reserva';
   if (t.includes('ANTICIPO')) return 'Anticipos de condóminos';
   return null;
 }
+
+// Fondo por defecto: la cuota ordinaria va al Fondo de Administración; si no hay certeza, "No especificado".
+function defaultFund(category, concept) {
+  const byConcept = detectFund(concept);
+  if (byConcept) return byConcept;
+  if (category === 'ING_ORD') return FUND_ADMIN;
+  if (category === 'IMPERMEABILIZACION') return 'Fondo de Impermeabilización';
+  if (category === 'CANALETAS') return 'Fondo de Canaletas';
+  if (category === 'CUOTAS_PEND') return 'Anticipos de condóminos';
+  return FUND_NONE;
+}
+const resolveFund = (fund, category, concept) => normalizeFund(fund) || defaultFund(category, concept);
+
+// Origen (torre o edificio y departamento) a partir del texto del movimiento.
+const UNIT_RE = /\b(TORRE|EDIFICIO|EDIF|ED|TO|T|E)\.?\s*(\d{1,2}|[A-H])\b\s*(?:[-–\/,]\s*)?(?:DEPARTAMENTO|DEPTO|DPTO|DEP|D|NO|#)?\.?\s*(\d{2,4}[A-Z]?)\b(?!\s*[-–]\s*\d)/;
+const DEPTO_RE = /\b(?:DEPARTAMENTO|DEPTO|DPTO)\.?\s*#?\s*(\d{2,4}[A-Z]?)\b(?!\s*[-–]\s*\d)/;
+function extractOrigin(text) {
+  const t = normText(text);
+  const m = t.match(UNIT_RE);
+  const isYear = x => /^(19|20)\d{2}$/.test(x);
+  if (m && !isYear(m[3]) && !(m[1].length <= 2 && !/^\d/.test(m[2]))) return `${/^E/.test(m[1]) ? 'Edificio' : 'Torre'} ${m[2]} - ${m[3]}`;
+  const d = t.match(DEPTO_RE);
+  return d && !isYear(d[1]) ? `Depto ${d[1]}` : '';
+}
+const formatOrigin = s => { const t = String(s || '').trim(); return t ? (extractOrigin(t) || t.slice(0, 40)) : ''; };
+const REFUND_RE = /REEMBOLSO|DEVOLUCION|REINTEGRO/;
 
 const isCash = concept => /EFECTIVO|DEP\.? EFVO|DEPOSITO EN VENTANILLA/.test(normText(concept));
 const JUSTIFIED_CASH = /RENTA|SALON|JARDIN|RECIBO|FACTURA|CUOTA/;
@@ -514,18 +571,15 @@ function computeFunds(months, openingBalances = {}) {
   const touch = (name) => { if (!map.has(name)) map.set(name, { name, buildingOrScope: '', amountCollected: 0, amountPaid: 0, opening: num(openingBalances[name]) || 0, lastUpdated: null }); return map.get(name); };
   for (const m of sortMonths(months)) {
     for (const mv of [...(m.movements || []), ...(m.unclassifiedMovements || [])]) {
-      let fund = mv.fund || null;
-      if (!fund && mv.category === 'IMPERMEABILIZACION') fund = 'Impermeabilización';
-      if (!fund && mv.category === 'CANALETAS') fund = 'Canaletas';
-      if (!fund && mv.category === 'CUOTAS_PEND') fund = 'Anticipos de condóminos';
-      if (!fund || mv.amount === null) continue;
+      const fund = resolveFund(mv.fund, mv.category, mv.concept);
+      if (!isSpecialFund(fund) || mv.amount === null) continue;
       const f = touch(fund);
       if (mv.scope && !f.buildingOrScope.includes(mv.scope)) f.buildingOrScope = [f.buildingOrScope, mv.scope].filter(Boolean).join(', ');
       if (mv.type === 'abono') f.amountCollected += Number(mv.amount); else f.amountPaid += Number(mv.amount);
       f.lastUpdated = mv.date || m.period;
     }
   }
-  for (const k of Object.keys(openingBalances)) touch(k);
+  for (const k of Object.keys(openingBalances)) if (isSpecialFund(normalizeFund(k)) && num(openingBalances[k]) !== null) touch(k);
   return [...map.values()].map(f => ({ ...f, amountCollected: round2(f.amountCollected), amountPaid: round2(f.amountPaid), balance: round2(f.opening + f.amountCollected - f.amountPaid) }));
 }
 
@@ -756,6 +810,7 @@ function detectAnomalies(months, indicators) {
     for (let i = 0; i < cargos.length; i++) for (let j = i + 1; j < cargos.length; j++) {
       const a = cargos[i], b = cargos[j];
       if (normText(a.concept) !== normText(b.concept)) continue;
+      if (a.origin && b.origin && unitKey(a.origin) !== unitKey(b.origin)) continue;
       const sameDay = a.date === b.date && round2(a.amount) === round2(b.amount);
       const close = Math.abs(a.amount - b.amount) / Math.max(a.amount, b.amount) < 0.05;
       if ((sameDay || close) && !seen.has(a.id + b.id)) {
@@ -862,7 +917,8 @@ function normalizeInterpretation(raw, fileId, fallbackPeriod) {
       type: type || 'cargo',
       category,
       engineSuggestion: suggestCategory(m.concept, type || 'cargo'),
-      fund: m.fund || detectFund(m.concept),
+      fund: resolveFund(m.fund, category, m.concept),
+      origin: formatOrigin(m.origin) || ((type === 'abono' || REFUND_RE.test(normText(m.concept))) ? extractOrigin(`${m.concept || ''} ${m.sourceText || ''}`) : ''),
       scope: m.scope || '',
       cash: !!m.cash || isCash(m.concept),
       sourcePageNumber: Number.isInteger(m.sourcePageNumber) ? m.sourcePageNumber : null,
@@ -954,7 +1010,7 @@ function hashMapping(months) {
   return (h >>> 0).toString(16);
 }
 
-return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, detectFund, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
+return { TOL, CATEGORIES, CATEGORY_IDS, catLabel, catGroup, FIXED_CATS, LEVELS, LEVEL_LABEL, KINDS, normText, suggestCategory, FUND_ADMIN, FUND_NONE, FUND_OPTIONS, isSpecialFund, normalizeFund, detectFund, defaultFund, resolveFund, extractOrigin, formatOrigin, isCash, round2, num, parseAmount, fmtMXN, movementTotals, recomputeMonth, sortMonths, continuityChecks, nextPeriod, engineQuestions, computeFunds, categoryTotalsByMonth, computeIndicators, unitKey, normalizeDelinquency, delinquencyRows, computeDelinquency, detectAnomalies, validateMonthMapping, normalizeInterpretation, NOTE_KINDS, normalizeNote, validateFindings, validateReport, validateAlert, hashMapping };
 })();
 
 const __m_pdf_parser_mjs = (() => {
@@ -1068,7 +1124,10 @@ Reglas:
 - initialBalance, finalBalance, reportedIncome (total de depósitos/abonos del resumen), reportedExpense (total de retiros/cargos del resumen): números en MXN tal como aparecen; null si no aparecen. No inventes montos faltantes.
 - pettyCashBalance: solo si el documento muestra un saldo de caja chica; si no, null.
 - delinquency: el documento suele incluir al final un REPORTE DE MOROSIDAD (adeudos, cartera vencida, saldos por cobrar) desglosado por departamento. Búscalo en todas las páginas, también en las escaneadas, y extráelo completo: {found: true|false, asOf: "YYYY-MM-DD" fecha de corte o null, reportedTotal: total del reporte o null, rows: [{unit: departamento tal como aparece (p. ej. "Torre 4 - 303"), amount: adeudo en MXN o null si es ilegible, months: meses de adeudo o null si no aparece, detail: concepto o nota breve, sourcePageNumber}]}. Una fila por departamento; no omitas departamentos ni sumes filas. No incluyas nombres de personas. Si no hay reporte de morosidad en estas páginas, usa {found: false, rows: []}.
-- movements: TODOS los movimientos de estas páginas, en orden. Cada uno: {date:"YYYY-MM-DD", concept, amount (número positivo o null si no se puede leer), type:"cargo"|"abono", category, sourcePageNumber}. Agrega solo cuando aplique: fund (nombre del fondo especial), scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
+- movements: TODOS los movimientos de estas páginas, en orden. Cada uno: {date:"YYYY-MM-DD", concept, amount (número positivo o null si no se puede leer), type:"cargo"|"abono", category, sourcePageNumber}. Incluye siempre fund y, cuando aplique, origin:
+  · fund = tipo de fondo al que entra el dinero (abono) o del que sale (cargo): "Fondo de Administración" para cuotas ordinarias de mantenimiento; "Fondo de Reserva", "Fondo de Impermeabilización", "Fondo de Canaletas" u otro fondo especial cuando el concepto o el documento lo indiquen; "No especificado" cuando no se pueda identificar con certeza (no lo supongas).
+  · origin = torre o edificio y departamento de donde proviene el movimiento, con el formato "Torre 4 - 102" o "Edificio B - 301". Aplica a abonos y solo a cargos que sean reembolsos o devoluciones a un departamento. Si el estado de cuenta tiene un reporte de ingresos por departamento, úsalo para identificarlo. Usa "" si no se identifica. Nunca omitas el departamento del concept cuando aparece en el documento: dos pagos iguales de departamentos distintos deben distinguirse.
+  Agrega solo cuando aplique: scope (edificio o alcance), cash:true (depósito en efectivo), sourceText (únicamente si el texto original aporta algo que no está en concept; máximo 100 caracteres). Omite los campos opcionales que no apliquen: la respuesta debe ser compacta.
 - category debe ser uno de: ${CAT_LIST}. Usa NO_CLASIFICADO si el concepto no encaja.
 - questions: preguntas concretas [{prompt, blocking, movementIndex}] sobre movimientos > $3,000 MXN sin categoría clara, montos ilegibles o saldos faltantes. blocking=true si impide analizar (p. ej. monto no identificado > $5,000).
 - notes: observaciones de la lectura, UNA por objeto (no juntes varias en un mismo texto): [{kind, title, detail}]. kind: "verificacion" (algo que cuadra o coincide), "inconsistencia" (errores, discrepancias o datos que no coinciden y deben revisarse), "lectura" (cómo se interpretó el documento: páginas, reportes, partidas que no son movimientos bancarios) o "hipotesis" (posibles causas, marcadas como tales). title: frase corta de máximo 8 palabras. detail: 1 a 3 oraciones claras con las cifras relevantes.${scanRule}${partRule}
@@ -1321,7 +1380,7 @@ function reportBody(S, ind, { includeNote = false, logo = '' } = {}) {
     return `<div class="finding ${esc(s.level)}"><h3>${i + 1}. ${esc(r.title || p.title)} <span class="pill ${esc(s.level)}">${LEVEL_LABEL[s.level]}</span> <span class="muted">(${esc(s.id)} · ${esc(catLabel(p.category))})</span></h3>
       ${para(r.narrative || p.description)}
       <p><b>Evidencia</b> <span class="src pdf">PDF</span></p>
-      <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td>${esc(m.date)}</td><td>${esc(m.concept)}</td><td>${esc(m.type)}</td><td class="n">${fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td>${esc(m.date)}</td><td>${esc(m.concept)}${m.origin ? ` (${esc(m.origin)})` : ''}</td><td>${esc(m.type)}</td><td class="n">${fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>
       ${r.evidenceSummary ? para(r.evidenceSummary) : ''}
       ${hyps.length ? `<p><b>Hipótesis aceptadas por el revisor</b> <span class="src user">Usuario</span></p><ul>${hyps.map(h => `<li>${esc(h.text)}</li>`).join('')}</ul>` : ''}
       <p><b>Recomendación</b> <span class="src ia">IA</span></p>${para(r.recommendation || p.recommendation || 'Sin recomendación cuantificada: los datos son insuficientes.')}
@@ -1456,7 +1515,18 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); storageOk = true; }
   catch { storageOk = false; }
 }
-let S = load() || fresh();
+// Casos guardados con versiones anteriores: unifica nombres de fondo y deduce el origen.
+function migrate(st) {
+  for (const m of st.months || []) for (const list of ['movements', 'unclassifiedMovements']) for (const mv of m[list] || []) {
+    mv.fund = E.resolveFund(mv.fund, mv.category, mv.concept);
+    if (mv.origin === undefined) mv.origin = (mv.type === 'abono' || /REEMBOLSO|DEVOLUCION|REINTEGRO/.test(E.normText(mv.concept))) ? E.extractOrigin(`${mv.concept || ''} ${mv.sourceText || ''}`) : '';
+  }
+  const fo = {};
+  for (const [k, v] of Object.entries(st.fundOpenings || {})) if (v !== undefined && v !== null && v !== '') fo[E.normalizeFund(k) || k] = v;
+  st.fundOpenings = fo;
+  return st;
+}
+let S = migrate(load() || fresh());
 const restored = S.events.length > 0;
 
 function log(type, detail = '') { S.events.push({ at: now(), type, detail: String(detail).slice(0, 300) }); save(); }
@@ -1884,14 +1954,14 @@ async function runInterpret(onlyIds = null) {
   save(); render();
   return failures.length === 0;
 }
-const slimMonth = m => ({ period: m.period, initialBalance: m.initialBalance, finalBalance: m.finalBalance, movements: [...m.movements, ...m.unclassifiedMovements].map(x => ({ date: x.date, concept: x.concept, amount: x.amount, type: x.type, category: x.category, sourcePageNumber: x.sourcePageNumber, fund: x.fund })) });
+const slimMonth = m => ({ period: m.period, initialBalance: m.initialBalance, finalBalance: m.finalBalance, movements: [...m.movements, ...m.unclassifiedMovements].map(x => ({ date: x.date, concept: x.concept, amount: x.amount, type: x.type, category: x.category, sourcePageNumber: x.sourcePageNumber, fund: x.fund, origin: x.origin })) });
 
 async function runAnalyze() {
   errors.analyze = null;
   const ms = months();
   const ind = indicators();
   const anomalies = E.detectAnomalies(ms, ind);
-  const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
+  const movs = allMovements().map(m => ({ id: m.id, date: m.date, concept: m.concept, origin: m.origin || undefined, amount: m.amount, type: m.type, category: m.category, fund: m.fund }));
   try {
     const delinquency = E.delinquencyRows(ms).map(r => ({ id: r.id, period: r.period, unit: r.unit, amount: r.amount, months: r.months }));
     const ai = await callAI('analyze', { condo: condoForAI(), indicators: ind, anomalies, movements: movs, delinquency }, 'analyze');
@@ -2017,7 +2087,7 @@ function restoreJSON(text) {
   n.selectionConfirmedAt = null;
   n.events = [...(j.events || []), { at: now(), type: 'restauración', detail: 'Copia JSON restaurada: se requiere renovar consentimiento, confirmación de datos y aprobaciones.' }];
   n.stage = n.months.length ? 2 : 1;
-  S = n; save(); render();
+  S = migrate(n); save(); render();
 }
 
 // ---------- Render ----------
@@ -2170,8 +2240,8 @@ function monthCard(m, catOpts) {
     </div>
     ${m.reportedIncome !== null || m.reportedExpense !== null ? `<p class="lead" style="font-size:13px">Resumen del estado ${src('pdf')}: depósitos ${E.fmtMXN(m.reportedIncome)} · retiros ${E.fmtMXN(m.reportedExpense)}. Diferencia con movimientos ${src('motor')}: ingresos ${E.fmtMXN(m.incomeVsReported)}, egresos ${E.fmtMXN(m.expenseVsReported)}.</p>` : ''}
     ${notesView(m.notes)}
-    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
-    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fund ? ` <span class="pill neutral">${esc(x.fund)}</span>` : ''}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${esc(x.type)}</td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
+    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Concepto original ${src('pdf')}</th><th>Origen</th><th>Tipo</th><th class="n">Monto</th><th>Tipo de fondo</th><th>Categoría</th><th>Pág.</th></tr></thead><tbody>
+    ${movs.map(x => `<tr class="${x.amount === null ? 'flag' : x.category === 'NO_CLASIFICADO' ? 'unc' : ''}" id="mv-${esc(x.id)}"><td class="mono">${esc(x.date)}</td><td title="${esc(x.sourceText)}">${esc(x.concept)}${x.fromScan ? ' <span class="pill scan" title="Leído de una página escaneada: verifica el importe">Escaneado</span>' : ''}</td><td>${originCell(x)}</td><td><span class="pill ${x.type === 'abono' ? 'abono' : 'cargo'}">${x.type === 'abono' ? 'Abono' : 'Cargo'}</span></td><td class="n">${x.amount === null ? `<input type="number" step="0.01" min="0" id="amt-${esc(x.id)}" data-amt="${esc(x.id)}" placeholder="No identificado">` : E.fmtMXN(x.amount)}</td><td>${fundCell(x)}</td><td><select id="cat-${esc(x.id)}" data-cat="${esc(x.id)}" aria-label="Categoría de ${esc(x.concept)}">${catOpts(x.category)}</select>${x.engineSuggestion && x.engineSuggestion !== x.category && x.engineSuggestion !== 'NO_CLASIFICADO' ? `<div style="font-size:11px;color:var(--ink-3)">Motor sugiere: ${esc(E.catLabel(x.engineSuggestion))}</div>` : ''}</td><td class="mono">${x.sourcePageNumber ?? '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${corr.length ? `<div class="stack"><strong style="font-size:13px">Correcciones documentadas ${src('user')}</strong>${corr.map(c => `<span style="font-size:13px;color:var(--ink-2)">${esc(new Date(c.at).toLocaleString('es-MX'))} · ${esc(c.what)}${c.why ? ` — «${esc(c.why)}»` : ''}</span>`).join('')}</div>` : ''}
     ${delinquencyMonth(m)}
@@ -2188,6 +2258,17 @@ function notesView(raw) {
   const count = k => notes.filter(n => n.kind === k).length;
   return `<details class="notes" ${count('inconsistencia') ? 'open' : ''}><summary><span class="notes-t">Observaciones de Claude sobre la lectura ${src('ia')}</span><span class="notes-c">${groups.map(([k, v, g]) => `<span class="nk ${k}">${g.length} ${g.length === 1 ? v.one : v.many}</span>`).join('')}</span></summary>
     <div class="notes-b">${groups.map(([k, v, g]) => `<section class="ng ${k}"><h4>${esc(v.label)}</h4><ul>${g.map(n => `<li>${n.title ? `<strong>${esc(n.title)}</strong>` : ''}<p>${hlAmounts(n.detail)}</p></li>`).join('')}</ul></section>`).join('')}</div></details>`;
+}
+
+// Celdas editables de la tabla de movimientos.
+function originCell(x) {
+  const applies = x.type === 'abono' || x.origin || /REEMBOLSO|DEVOLUCION|REINTEGRO/.test(E.normText(x.concept));
+  if (!applies) return '<span class="muted">—</span>';
+  return `<input type="text" class="origin-in ${x.origin ? '' : 'empty'}" id="org-${esc(x.id)}" data-origin="${esc(x.id)}" value="${esc(x.origin || '')}" placeholder="No identificado" maxlength="40" aria-label="Origen de ${esc(x.concept)}">`;
+}
+function fundCell(x) {
+  const opts = E.FUND_OPTIONS.includes(x.fund) ? E.FUND_OPTIONS : [x.fund, ...E.FUND_OPTIONS];
+  return `<select class="fund-sel ${x.fund === E.FUND_NONE ? 'none' : x.fund === E.FUND_ADMIN ? 'admin' : 'special'}" id="fnd-${esc(x.id)}" data-mvfund="${esc(x.id)}" aria-label="Tipo de fondo de ${esc(x.concept)}">${opts.map(o => `<option ${o === x.fund ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
 }
 
 function delinquencyMonth(m) {
@@ -2297,7 +2378,7 @@ function findingCard(f, { selectable = false, selected = false } = {}) {
   const interp = f.interpretation || f.description;
   const row = (k, label, body) => body ? `<div class="frow ${k}"><span class="flabel">${label}</span><div class="fbody">${body}</div></div>` : '';
   return `<article class="finding ${esc(f.level)} ${selected ? 'sel' : ''}"><div class="hd"><span class="pill ${esc(f.level)}">${E.LEVEL_LABEL[f.level]}</span><h3>${esc(f.title)}</h3><span class="mono" style="font-size:12px;color:var(--ink-3)">${esc(f.id)} · ${esc(E.catLabel(f.category))}</span></div>
-  ${row('fact', 'Hechos', `${facts.length ? `<ul>${facts.map(t => `<li>${hlAmounts(t)}</li>`).join('')}</ul>` : ''}${ev.length ? `<div class="tbl-wrap evt"><table><thead><tr><th>Fecha</th><th>Movimiento ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td class="mono">${esc(m.date)}</td><td>${esc(m.concept)}</td><td>${esc(m.type)}</td><td class="n">${E.fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>` : ''}`)}
+  ${row('fact', 'Hechos', `${facts.length ? `<ul>${facts.map(t => `<li>${hlAmounts(t)}</li>`).join('')}</ul>` : ''}${ev.length ? `<div class="tbl-wrap evt"><table><thead><tr><th>Fecha</th><th>Movimiento ${src('pdf')}</th><th>Tipo</th><th class="n">Monto</th></tr></thead><tbody>${ev.map(m => `<tr><td class="mono">${esc(m.date)}</td><td>${esc(m.concept)}${m.origin ? ` <span class="pill neutral">${esc(m.origin)}</span>` : ''}</td><td>${esc(m.type)}</td><td class="n">${E.fmtMXN(m.amount)}</td></tr>`).join('')}</tbody></table></div>` : ''}`)}
   ${row('interp', 'Interpretación', interp ? `<p>${hlAmounts(interp)}</p>` : '')}
   ${row('hyp', 'Hipótesis', (f.hypotheses || []).length ? `<ul>${f.hypotheses.map(h => `<li>${hlAmounts(h.text)}${h.quantified ? ' <span class="pill neutral">cuantificada</span>' : ''}</li>`).join('')}</ul>` : '')}
   ${row('impact', 'Impacto posible', f.impact ? `<p>${hlAmounts(f.impact)}</p>` : '')}
@@ -2545,6 +2626,8 @@ document.addEventListener('change', e => {
   if (t.dataset.bind) return render();
   if (t.dataset.check) { S._checks[t.dataset.check] = t.checked; save(); return render(); }
   if (t.dataset.cat) return changeMovement(t.dataset.cat, { category: t.value }, true);
+  if (t.dataset.mvfund) return changeMovement(t.dataset.mvfund, { fund: t.value }, false, 'Tipo de fondo asignado por el usuario');
+  if (t.dataset.origin !== undefined) return changeMovement(t.dataset.origin, { origin: E.formatOrigin(t.value) }, false, 'Origen capturado por el usuario');
   if (t.dataset.qcat && t.value) return changeMovement(t.dataset.qcat, { category: t.value }, false, 'Respuesta a aclaración');
   if ((t.dataset.amt || t.dataset.qamt) && t.value !== '') return changeMovement(t.dataset.amt || t.dataset.qamt, { amount: Math.abs(Number(t.value)) }, false, 'Monto no identificado capturado por el usuario');
   if (t.dataset.qbal && t.value !== '') { const [p, f] = t.dataset.qbal.split('|'); return changeBalance(p, f, t.value); }
@@ -2561,9 +2644,11 @@ function changeMovement(id, patch, askWhy, why = '') {
   for (const m of S.months) for (const list of ['movements', 'unclassifiedMovements']) {
     const mv = m[list].find(x => x.id === id);
     if (!mv) continue;
-    const before = { category: mv.category, amount: mv.amount };
+    const before = { category: mv.category, amount: mv.amount, fund: mv.fund, origin: mv.origin };
     Object.assign(mv, patch);
-    const what = patch.category ? `${mv.date} «${mv.concept}»: ${E.catLabel(before.category)} → ${E.catLabel(patch.category)}` : `${mv.date} «${mv.concept}»: monto ${E.fmtMXN(patch.amount)}`;
+    const what = 'fund' in patch ? `${mv.date} «${mv.concept}»: fondo ${before.fund || E.FUND_NONE} → ${patch.fund}`
+      : 'origin' in patch ? `${mv.date} «${mv.concept}»: origen ${before.origin || 'no identificado'} → ${patch.origin || 'no identificado'}`
+      : patch.category ? `${mv.date} «${mv.concept}»: ${E.catLabel(before.category)} → ${E.catLabel(patch.category)}` : `${mv.date} «${mv.concept}»: monto ${E.fmtMXN(patch.amount)}`;
     const entry = { at: now(), period: m.period, movementId: id, what, why };
     S.corrections.push(entry);
     Object.assign(m, E.recomputeMonth(m));

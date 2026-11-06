@@ -323,3 +323,15 @@ main { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scroll-pad
 .pf-st.ok { color: var(--ivy); }
 .pf-st.err { color: var(--crit); }
 .pcalls li { font-size: 11.5px; color: var(--ink-3); font-family: var(--f-mono); overflow-wrap: anywhere; }
+
+/* Tabla de movimientos: tipo en color, origen y tipo de fondo */
+.pill.abono { background: var(--ivy-soft); color: var(--ivy); border-color: rgba(76,100,32,.35); }
+.pill.cargo { background: rgba(179,38,30,.09); color: #a3261f; border-color: rgba(179,38,30,.3); }
+td .origin-in { width: 128px; padding: 5px 8px; font-size: 12.5px; font-family: var(--f-mono); }
+td .origin-in.empty { background: rgba(196,128,0,.06); border-style: dashed; }
+td select.fund-sel { min-width: 0; width: 196px; font-size: 12.5px; }
+td select.fund-sel.none { color: var(--ink-3); border-style: dashed; }
+td select.fund-sel.special { border-color: var(--obs); }
+td.mono:first-child { white-space: nowrap; }
+td select.fund-sel { width: 176px; }
+.month td select[data-cat] { min-width: 0; width: 180px; }

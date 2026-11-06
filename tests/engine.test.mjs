@@ -122,6 +122,31 @@ test('un hallazgo puede citar filas de morosidad como evidencia', () => {
   assert.equal(r.findings.length, 3);
 });
 
+test('tipo de fondo y origen por movimiento', () => {
+  const file = { id: 'f1', period: '2026-04', fileName: 'x.pdf', pages: [] };
+  const r = validateResult('interpret', { period: '2026-04', initialBalance: 0, finalBalance: 0, movements: [
+    { date: '2026-04-01', concept: 'Cuota ordinaria abril 2026', amount: 2500, type: 'abono', category: 'ING_ORD', origin: 'T1-101' },
+    { date: '2026-04-01', concept: 'Cuota ordinaria abril 2026', amount: 2500, type: 'abono', category: 'ING_ORD', origin: 'Torre 2 - 202' },
+    { date: '2026-04-02', concept: 'Torre 4 - 102 (Cuota de fondo de reserva 2024)', amount: 1200, type: 'abono', category: 'ING_EXT' },
+    { date: '2026-04-03', concept: 'SERV LIMPIEZA ABRIL', amount: 9000, type: 'cargo', category: 'EF_LIMPIEZA' },
+    { date: '2026-04-04', concept: 'Reembolso Torre 3 depto 402 pago duplicado', amount: 2500, type: 'cargo', category: 'NO_CLASIFICADO', fund: 'null' },
+  ] }, { file });
+  const mv = r.movements.concat(r.unclassifiedMovements);
+  assert.deepEqual(mv.map(m => m.origin), ['Torre 1 - 101', 'Torre 2 - 202', 'Torre 4 - 102', '', 'Torre 3 - 402']);
+  assert.deepEqual(mv.map(m => m.fund), [E.FUND_ADMIN, E.FUND_ADMIN, 'Fondo de Reserva', E.FUND_NONE, E.FUND_NONE]);
+  const funds = E.computeFunds([r]);
+  assert.deepEqual(funds.map(f => f.name), ['Fondo de Reserva']);
+  assert.equal(E.extractOrigin('Pago abril 2026 E 12 2026'), '');
+});
+
+test('pagos iguales de departamentos distintos no son duplicados', () => {
+  const a = { ...mv('d1', '2026-04-10', 'REEMBOLSO CUOTA', 2500, 'cargo', 'NO_CLASIFICADO'), origin: 'Torre 1 - 101' };
+  const b = { ...mv('d2', '2026-04-10', 'REEMBOLSO CUOTA', 2500, 'cargo', 'NO_CLASIFICADO'), origin: 'Torre 2 - 202' };
+  assert.ok(!E.detectAnomalies([month('2026-04', 10000, 5000, [a, b])]).some(x => x.kind === 'potential_duplicate'));
+  const c = { ...b, id: 'd3', origin: 'Torre 1 - 101' };
+  assert.ok(E.detectAnomalies([month('2026-04', 10000, 5000, [a, c])]).some(x => x.kind === 'potential_duplicate'));
+});
+
 test('nota de alerta larga (>400 palabras) es aceptada', () => {
   const body = Array(450).fill('palabra').join(' ');
   const al = { addressee: 'Comité', sender: 'Análisis IA', reference: 'X 2026-01', body, findings: [{ id: 'H1' }, { id: 'H2' }, { id: 'H3' }], questionsForCommittee: ['a', 'b', 'c'], legalWarning: 'conforme al artículo 39 de la LPCIDF' };
